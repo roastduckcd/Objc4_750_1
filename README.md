@@ -4,7 +4,7 @@ debugable objc4_750_1
 
 # Environment
 
-macOS 10.14.1
+macOS 10.14.3
 
 Xcode 10.1
 
