@@ -7,17 +7,22 @@
 		<key>RDPerson.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>1</integer>
+			<integer>0</integer>
 		</dict>
 		<key>objc.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
-			<integer>0</integer>
+			<integer>1</integer>
 		</dict>
 	</dict>
 	<key>SuppressBuildableAutocreation</key>
 	<dict>
 		<key>61F60AD5222BB8B700DF2C22</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>61F60AED222BB95A00DF2C22</key>
 		<dict>
 			<key>primary</key>
 			<true/>

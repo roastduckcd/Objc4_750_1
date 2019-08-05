@@ -10,7 +10,10 @@
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
         // insert code here...
+        NSObject *o = [NSObject alloc];
         NSLog(@"Hello, World!");
     }
+
+
     return 0;
 }
