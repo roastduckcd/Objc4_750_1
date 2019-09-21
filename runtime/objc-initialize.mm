@@ -490,6 +490,7 @@ void _class_initialize(Class cls)
 
     // Make sure super is done initializing BEFORE beginning to initialize cls.
     // See note about deadlock above.
+    // 父类先开始 initialize
     supercls = cls->superclass;
     if (supercls  &&  !supercls->isInitialized()) {
         _class_initialize(supercls);

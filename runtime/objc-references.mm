@@ -278,6 +278,7 @@ void _object_set_associative_reference(id object, void *key, id value, uintptr_t
         disguised_ptr_t disguised_object = DISGUISE(object);
         if (new_value) {
             // break any existing association.
+            // 待关联对象是否已在哈希表中
             AssociationsHashMap::iterator i = associations.find(disguised_object);
             if (i != associations.end()) {
                 // secondary table exists

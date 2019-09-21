@@ -594,7 +594,7 @@ class list_array_tt {
     struct array_t {
         uint32_t count;
         List* lists[0];
-
+        //class_rw_t 中 methods、protocols、propertyies的大小
         static size_t byteSize(uint32_t count) {
             return sizeof(array_t) + count*sizeof(lists[0]);
         }
@@ -651,6 +651,9 @@ class list_array_tt {
  private:
     union {
         List* list;
+        // 类似 nonpointer
+        // 最后一个 bit 用来标记 list 是否含有数组
+        // List * :
         uintptr_t arrayAndFlag;
     };
 
@@ -659,10 +662,23 @@ class list_array_tt {
     }
 
     array_t *array() {
+        // 最后 bit 置为 0
+        // 得到 union 中 List* 的地址
+
+        // entsize_list_tt
+        //      entsizeAndFlags;
+        //      count
+        //      first method_t
+
+        // 强转
+        // array_t
+        //      count
+        //      method_list_t **
         return (array_t *)(arrayAndFlag & ~1);
     }
 
     void setArray(array_t *array) {
+        // 最后 bit 置为 1
         arrayAndFlag = (uintptr_t)array | 1;
     }
 
@@ -717,22 +733,34 @@ class list_array_tt {
         }
     }
 
+    /**
+     添加分类方法、协议、属性
+
+     @param addedLists 主类方法列表，被添加的
+     @param addedCount 添加数量
+     */
     void attachLists(List* const * addedLists, uint32_t addedCount) {
         if (addedCount == 0) return;
 
+        // TODO: TODO - 主类什么时候有下面的三种情况
         if (hasArray()) {
             // many lists -> many lists
             uint32_t oldCount = array()->count;
             uint32_t newCount = oldCount + addedCount;
+            // 从数组起始地址重新分配新的内存大小
             setArray((array_t *)realloc(array(), array_t::byteSize(newCount)));
             array()->count = newCount;
+            // 复制 lists 中的那么多字节到 (lists+addedCount) 指向的内存，内存区域可以重叠
+            // 将数组向后偏移 addedCount 个字节，前面的 addedCount 放添加的方法
             memmove(array()->lists + addedCount, array()->lists, 
                     oldCount * sizeof(array()->lists[0]));
+            // 复制 addedLists 中的那么多字节到 lists 执行的内存，就是放在原来数组的前面
             memcpy(array()->lists, addedLists, 
                    addedCount * sizeof(array()->lists[0]));
         }
         else if (!list  &&  addedCount == 1) {
             // 0 lists -> 1 list
+            // 只有一个分类，添加第一个分类？
             list = addedLists[0];
         } 
         else {
@@ -740,9 +768,12 @@ class list_array_tt {
             List* oldList = list;
             uint32_t oldCount = oldList ? 1 : 0;
             uint32_t newCount = oldCount + addedCount;
+            // 开辟一段新的内存空间给 lists
             setArray((array_t *)malloc(array_t::byteSize(newCount)));
             array()->count = newCount;
+            // 将原来的方法列表放到数组最后一个元素
             if (oldList) array()->lists[addedCount] = oldList;
+            // 复制 addedLists 中那么多字节到数组开头指向的内存，新增方法列表放到数组前面
             memcpy(array()->lists, addedLists, 
                    addedCount * sizeof(array()->lists[0]));
         }
@@ -1379,13 +1410,20 @@ struct swift_class_t : objc_class {
 
 
 struct category_t {
+    // 分类名
     const char *name;
+    // 所属主类
     classref_t cls;
+    // 实例方法，加到 cls->rw->methods
     struct method_list_t *instanceMethods;
+    // 类方法，加到 cls->ISA()->rw->methods
     struct method_list_t *classMethods;
+    // 协议，加到 cls和cls->ISA()->rw->protocols
     struct protocol_list_t *protocols;
+    // 实例属性，加到 cls->rw->properties
     struct property_list_t *instanceProperties;
     // Fields below this point are not always present on disk.
+    // 类属性，一般没用，加到 cls->ISA()->rw->properties
     struct property_list_t *_classProperties;
 
     method_list_t *methodsForMeta(bool isMeta) {

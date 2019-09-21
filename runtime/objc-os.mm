@@ -227,11 +227,13 @@ static header_info * addHeader(const headerType *mhdr, const char *path, int &to
     bool inSharedCache = false;
 
     // Look for hinfo from the dyld shared cache.
+    // 共享缓存中的镜像
     hi = preoptimizedHinfoForHeader(mhdr);
     if (hi) {
         // Found an hinfo in the dyld shared cache.
 
         // Weed out duplicates.
+        // 剔除废弃的
         if (hi->isLoaded()) {
             return NULL;
         }
@@ -259,13 +261,14 @@ static header_info * addHeader(const headerType *mhdr, const char *path, int &to
     else 
     {
         // Didn't find an hinfo in the dyld shared cache.
-
+        // 镜像不再共享缓存
         // Weed out duplicates
         for (hi = FirstHeader; hi; hi = hi->getNext()) {
             if (mhdr == hi->mhdr()) return NULL;
         }
 
         // Locate the __OBJC segment
+        // 获取__objc_imageinfo段信息
         size_t info_size = 0;
         unsigned long seg_size;
         const objc_image_info *image_info = _getObjcImageInfo(mhdr,&info_size);
@@ -465,21 +468,25 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     int unoptimizedTotalClasses = 0;
     {
         uint32_t i = mhCount;
+        // TODO: TODO - 1.做了什么？？？
         while (i--) {
+            // MachO 头信息
             const headerType *mhdr = (const headerType *)mhdrs[i];
-
+            // 将MachO头信息添加到一个头信息列表
             auto hi = addHeader(mhdr, mhPaths[i], totalClasses, unoptimizedTotalClasses);
             if (!hi) {
                 // no objc data in this entry
                 continue;
             }
-            
+            // 可执行文件
             if (mhdr->filetype == MH_EXECUTE) {
                 // Size some data structures based on main executable's size
 #if __OBJC2__
                 size_t count;
+                // 获取 MachO 中 __objc_selrefs 段的方法数量
                 _getObjc2SelectorRefs(hi, &count);
                 selrefCount += count;
+                // 获取 MachO 中 __objc_msgrefs 段的方法数量
                 _getObjc2MessageRefs(hi, &count);
                 selrefCount += count;
 #else
@@ -518,7 +525,9 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     // executable does not contain Objective-C code but Objective-C 
     // is dynamically loaded later.
     if (firstTime) {
+        // 将libobjc的几个方法添加到方法列表
         sel_init(selrefCount);
+        // 自动释放池和弱引用表初始化
         arr_init();
 
 #if SUPPORT_GC_COMPAT
@@ -574,6 +583,7 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     }
 
     if (hCount > 0) {
+        // hList 镜像头信息列表
         _read_images(hList, hCount, totalClasses, unoptimizedTotalClasses);
     }
 
@@ -599,6 +609,7 @@ unmap_image_nolock(const struct mach_header *mh)
     header_info *hi;
     
     // Find the runtime's header_info struct for the image
+    // 运行时镜像头部信息
     for (hi = FirstHeader; hi != NULL; hi = hi->getNext()) {
         if (hi->mhdr() == (const headerType *)mh) {
             break;
@@ -613,10 +624,11 @@ unmap_image_nolock(const struct mach_header *mh)
                      hi->mhdr()->filetype == MH_BUNDLE ? " (bundle)" : "",
                      hi->info()->isReplacement() ? " (replacement)" : "");
     }
-
+    // 卸载镜像
     _unload_image(hi);
 
     // Remove header_info from header list
+    // 头部信息列表删除卸载镜像的头信息
     removeHeader(hi);
     free(hi);
 }
@@ -877,7 +889,7 @@ void _objc_init(void)
     static bool initialized = false;
     if (initialized) return;
     initialized = true;
-    
+
     // fixme defer initialization until an objc-using image is found?
     environ_init();
     tls_init();

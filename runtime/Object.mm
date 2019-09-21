@@ -48,7 +48,7 @@ typedef struct objc_object *id;
 }
 
 -(id) retain
-{
+{   // objc_msgSend(self, _cmd)
     return _objc_rootRetain(self);
 }
 

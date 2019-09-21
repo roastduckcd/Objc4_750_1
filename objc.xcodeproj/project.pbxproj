@@ -11,6 +11,13 @@
 		393CEAC60DC69E67000B69DE /* objc-references.h in Headers */ = {isa = PBXBuildFile; fileRef = 393CEAC50DC69E67000B69DE /* objc-references.h */; };
 		39ABD72312F0B61800D1054C /* objc-weak.h in Headers */ = {isa = PBXBuildFile; fileRef = 39ABD71F12F0B61800D1054C /* objc-weak.h */; };
 		39ABD72412F0B61800D1054C /* objc-weak.mm in Sources */ = {isa = PBXBuildFile; fileRef = 39ABD72012F0B61800D1054C /* objc-weak.mm */; };
+		6106654E232737BF00A974EC /* Person+Extra.h in Sources */ = {isa = PBXBuildFile; fileRef = 611BDF3023255EBA0030E612 /* Person+Extra.h */; };
+		6106654F232737D100A974EC /* Person+Other.h in Sources */ = {isa = PBXBuildFile; fileRef = 61B4D55B2326B405004A6DBA /* Person+Other.h */; };
+		610665522327392100A974EC /* Person+More.m in Sources */ = {isa = PBXBuildFile; fileRef = 610665512327392100A974EC /* Person+More.m */; };
+		611BDF3123255EBA0030E612 /* Person+Extra.m in Sources */ = {isa = PBXBuildFile; fileRef = 611BDF2F23255EBA0030E612 /* Person+Extra.m */; };
+		6127FB7E22F90D2C00FC4B97 /* Person.m in Sources */ = {isa = PBXBuildFile; fileRef = 6127FB7D22F90D2C00FC4B97 /* Person.m */; };
+		616535D1230E51AC0090672F /* Person.h in Sources */ = {isa = PBXBuildFile; fileRef = 6127FB7C22F90D2C00FC4B97 /* Person.h */; };
+		61B4D55D2326B405004A6DBA /* Person+Other.m in Sources */ = {isa = PBXBuildFile; fileRef = 61B4D55C2326B405004A6DBA /* Person+Other.m */; };
 		61F60AF1222BB95A00DF2C22 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 61F60AF0222BB95A00DF2C22 /* main.m */; };
 		61F84E4C22F84C0200E534FC /* libobjc.A.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = D2AAC0630554660B00DB518D /* libobjc.A.dylib */; };
 		7593EC58202248E50046AB96 /* objc-object.h in Headers */ = {isa = PBXBuildFile; fileRef = 7593EC57202248DF0046AB96 /* objc-object.h */; };
@@ -119,6 +126,18 @@
 		393CEAC50DC69E67000B69DE /* objc-references.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "objc-references.h"; path = "runtime/objc-references.h"; sourceTree = "<group>"; };
 		39ABD71F12F0B61800D1054C /* objc-weak.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "objc-weak.h"; path = "runtime/objc-weak.h"; sourceTree = "<group>"; };
 		39ABD72012F0B61800D1054C /* objc-weak.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = "objc-weak.mm"; path = "runtime/objc-weak.mm"; sourceTree = "<group>"; };
+		610665502327392100A974EC /* Person+More.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Person+More.h"; sourceTree = "<group>"; };
+		610665512327392100A974EC /* Person+More.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "Person+More.m"; sourceTree = "<group>"; };
+		611BDF2F23255EBA0030E612 /* Person+Extra.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = "Person+Extra.m"; sourceTree = "<group>"; };
+		611BDF3023255EBA0030E612 /* Person+Extra.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = "Person+Extra.h"; sourceTree = "<group>"; };
+		6127FB7C22F90D2C00FC4B97 /* Person.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Person.h; sourceTree = "<group>"; };
+		6127FB7D22F90D2C00FC4B97 /* Person.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Person.m; sourceTree = "<group>"; };
+		61282E2D22FA682F00219335 /* arm64_main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = arm64_main.cpp; sourceTree = "<group>"; };
+		61282E3222FA948300219335 /* arm64_person.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = arm64_person.cpp; sourceTree = "<group>"; };
+		6189D7322332067E00087AC4 /* isa.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = isa.h; path = runtime/isa.h; sourceTree = "<group>"; };
+		61AA269A232CDA9300A34BB9 /* arm64_person_913.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = arm64_person_913.cpp; sourceTree = "<group>"; };
+		61B4D55B2326B405004A6DBA /* Person+Other.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Person+Other.h"; sourceTree = "<group>"; };
+		61B4D55C2326B405004A6DBA /* Person+Other.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "Person+Other.m"; sourceTree = "<group>"; };
 		61F60AEE222BB95A00DF2C22 /* RDPerson */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = RDPerson; sourceTree = BUILT_PRODUCTS_DIR; };
 		61F60AF0222BB95A00DF2C22 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		7593EC57202248DF0046AB96 /* objc-object.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "objc-object.h"; path = "runtime/objc-object.h"; sourceTree = "<group>"; };
@@ -313,6 +332,17 @@
 			isa = PBXGroup;
 			children = (
 				61F60AF0222BB95A00DF2C22 /* main.m */,
+				6127FB7C22F90D2C00FC4B97 /* Person.h */,
+				6127FB7D22F90D2C00FC4B97 /* Person.m */,
+				611BDF3023255EBA0030E612 /* Person+Extra.h */,
+				611BDF2F23255EBA0030E612 /* Person+Extra.m */,
+				61B4D55B2326B405004A6DBA /* Person+Other.h */,
+				61B4D55C2326B405004A6DBA /* Person+Other.m */,
+				610665502327392100A974EC /* Person+More.h */,
+				610665512327392100A974EC /* Person+More.m */,
+				61282E2D22FA682F00219335 /* arm64_main.cpp */,
+				61282E3222FA948300219335 /* arm64_person.cpp */,
+				61AA269A232CDA9300A34BB9 /* arm64_person_913.cpp */,
 			);
 			path = RDPerson;
 			sourceTree = "<group>";
@@ -332,6 +362,7 @@
 		838485C60D6D687700CEA253 /* Public Headers */ = {
 			isa = PBXGroup;
 			children = (
+				6189D7322332067E00087AC4 /* isa.h */,
 				83A4AEDD1EA08C5700ACADDE /* ObjectiveC.apinotes */,
 				83A4AED71EA06D9D00ACADDE /* module.modulemap */,
 				83F4B52615E843B100E0926F /* NSObjCRuntime.h */,
@@ -576,6 +607,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6106654F232737D100A974EC /* Person+Other.h in Sources */,
+				610665522327392100A974EC /* Person+More.m in Sources */,
+				6106654E232737BF00A974EC /* Person+Extra.h in Sources */,
+				61B4D55D2326B405004A6DBA /* Person+Other.m in Sources */,
+				616535D1230E51AC0090672F /* Person.h in Sources */,
+				611BDF3123255EBA0030E612 /* Person+Extra.m in Sources */,
+				6127FB7E22F90D2C00FC4B97 /* Person.m in Sources */,
 				61F60AF1222BB95A00DF2C22 /* main.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

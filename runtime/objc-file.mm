@@ -45,8 +45,10 @@ T* getDataSection(const headerType *mhdr, const char *sectname,
     if (outCount) *outCount = byteCount / sizeof(T);
     return data;
 }
-
-#define GETSECT(name, type, sectname)                                   \
+//_getObjc2SelectorRefs,        SEL,             "__objc_selrefs"
+// SEL *_getObjc2SelectorRefs(const headerType *mhdr, size_t *outCount) {
+//
+#define GETSECT(name, type, sectname)\
     type *name(const headerType *mhdr, size_t *outCount) {              \
         return getDataSection<type>(mhdr, sectname, nil, outCount);     \
     }                                                                   \

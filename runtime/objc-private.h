@@ -753,18 +753,20 @@ class StripedMap {
 #endif
 
     struct PaddedT {
+        // SideTable
         T value alignas(CacheLineSize);
     };
 
     PaddedT array[StripeCount];
-
+    // 散列函数：异或位移哈希算法
     static unsigned int indexForPointer(const void *p) {
         uintptr_t addr = reinterpret_cast<uintptr_t>(p);
         return ((addr >> 4) ^ (addr >> 9)) % StripeCount;
     }
 
  public:
-    T& operator[] (const void *p) { 
+    T& operator[] (const void *p) {
+        printf("%p, %u ====\n", p, indexForPointer(p));
         return array[indexForPointer(p)].value; 
     }
     const T& operator[] (const void *p) const { 
@@ -929,6 +931,7 @@ static inline uint32_t ptr_hash(uint64_t key)
 {
     key ^= key >> 4;
     key *= 0x8a970be7488fda55;
+    // 反转字节：0x11223344 =>   0x44332211
     key ^= __builtin_bswap64(key);
     return (uint32_t)key;
 }

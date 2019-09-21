@@ -584,10 +584,10 @@ class DenseMap
   typedef typename BaseT::BucketT BucketT;
   friend class DenseMapBase<DenseMap, KeyT, ValueT, KeyInfoT, ZeroValuesArePurgeable>;
 
-  BucketT *Buckets;
-  unsigned NumEntries;
-  unsigned NumTombstones;
-  unsigned NumBuckets;
+  BucketT *Buckets;     // object  -  ref count
+  unsigned NumEntries;  //  num of real object-rfCount pairs
+  unsigned NumTombstones;   // num of empty
+  unsigned NumBuckets;  //  num of buckets = NumEntries + NumBuckets
 
 public:
   explicit DenseMap(unsigned NumInitBuckets = 0) {

@@ -76,10 +76,10 @@ namespace {
 #define SIDE_TABLE_WEAKLY_REFERENCED (1UL<<0)
 #define SIDE_TABLE_DEALLOCATING      (1UL<<1)  // MSB-ward of weak bit
 #define SIDE_TABLE_RC_ONE            (1UL<<2)  // MSB-ward of deallocating bit
-#define SIDE_TABLE_RC_PINNED         (1UL<<(WORD_BITS-1))
+#define SIDE_TABLE_RC_PINNED         (1UL<<(WORD_BITS-1)) //64
 
 #define SIDE_TABLE_RC_SHIFT 2
-#define SIDE_TABLE_FLAG_MASK (SIDE_TABLE_RC_ONE-1)
+#define SIDE_TABLE_FLAG_MASK (SIDE_TABLE_RC_ONE-1) // 3
 
 // RefcountMap disguises its pointers because we 
 // don't want the table to act as a root for `leaks`.
@@ -170,6 +170,7 @@ static void SideTableInit() {
 }
 
 static StripedMap<SideTable>& SideTables() {
+    // reinterpret_cast
     return *reinterpret_cast<StripedMap<SideTable>*>(SideTableBuf);
 }
 
@@ -260,6 +261,7 @@ objc_storeStrong(id *location, id obj)
 // If CrashIfDeallocating is true, the process is halted if newObj is 
 //   deallocating or newObj's class does not support weak references. 
 //   If CrashIfDeallocating is false, nil is stored instead.
+// HaveOld HaveNew 指的是弱引用是否在weak表中有存储（该弱引用之前已经指向过其他对象）
 enum CrashIfDeallocating {
     DontCrashIfDeallocating = false, DoCrashIfDeallocating = true
 };
@@ -270,30 +272,38 @@ storeWeak(id *location, objc_object *newObj)
 {
     assert(haveOld  ||  haveNew);
     if (!haveNew) assert(newObj == nil);
-
+    HaveOld ho = haveOld;
+    HaveNew hn = haveNew;
     Class previouslyInitializedClass = nil;
     id oldObj;
     SideTable *oldTable;
     SideTable *newTable;
 
     // Acquire locks for old and new values.
+    // 锁顺序死锁
     // Order by lock address to prevent lock ordering problems. 
     // Retry if the old value changes underneath us.
  retry:
+    // 弱引用之前指向过其他对象，返回这个对象所在的散列表
     if (haveOld) {
-        oldObj = *location;
-        oldTable = &SideTables()[oldObj];
+        oldObj = *location;     // location = weak ptr
+        oldTable = &SideTables()[oldObj];   // object ptr
     } else {
         oldTable = nil;
     }
+    // 计算新对象地址的散列值，得到对应的散列表
     if (haveNew) {
         newTable = &SideTables()[newObj];
     } else {
         newTable = nil;
     }
 
-    SideTable::lockTwo<haveOld, haveNew>(oldTable, newTable);
+    StripedMap<SideTable> *map = (StripedMap<SideTable> *)SideTableBuf;
+    SideTable *so = &SideTables()[oldObj];
 
+    // 自旋锁
+    SideTable::lockTwo<haveOld, haveNew>(oldTable, newTable);
+    // location 可能被其他线程修改
     if (haveOld  &&  *location != oldObj) {
         SideTable::unlockTwo<haveOld, haveNew>(oldTable, newTable);
         goto retry;
@@ -302,12 +312,16 @@ storeWeak(id *location, objc_object *newObj)
     // Prevent a deadlock between the weak reference machinery
     // and the +initialize machinery by ensuring that no 
     // weakly-referenced object has an un-+initialized isa.
+    // 确保弱引用对象都有isa，避免在弱引用调用和 +initialize 调用间出现死锁
+
+    // 确保类已经被初始化
     if (haveNew  &&  newObj) {
         Class cls = newObj->getIsa();
         if (cls != previouslyInitializedClass  &&  
             !((objc_class *)cls)->isInitialized()) 
         {
             SideTable::unlockTwo<haveOld, haveNew>(oldTable, newTable);
+            // 向未初始化类发送 +initialize 消息，父类先
             _class_initialize(_class_getNonMetaClass(cls, (id)newObj));
 
             // If this class is finished with +initialize then we're good.
@@ -323,19 +337,23 @@ storeWeak(id *location, objc_object *newObj)
     }
 
     // Clean up old value, if any.
+    // 弱引用之前已经存储过，先清除之前的存储，再添加
     if (haveOld) {
         weak_unregister_no_lock(&oldTable->weak_table, oldObj, location);
     }
 
     // Assign new value, if any.
     if (haveNew) {
+        // 注册新的 object -> entry {weak ref }对
         newObj = (objc_object *)
             weak_register_no_lock(&newTable->weak_table, (id)newObj, location, 
                                   crashIfDeallocating);
         // weak_register_no_lock returns nil if weak store should be rejected
 
         // Set is-weakly-referenced bit in refcount table.
+        // 设置 isa 位域中的弱引用 bit
         if (newObj  &&  !newObj->isTaggedPointer()) {
+            // 设置 isa 的 weakly_referenced 位
             newObj->setWeaklyReferenced_nolock();
         }
 
@@ -1342,18 +1360,24 @@ objc_object::sidetable_addExtraRC_nolock(size_t delta_rc)
     assert(isa.nonpointer);
     SideTable& table = SideTables()[this];
 
+    // 获取当前对象对应的引用计数表
     size_t& refcntStorage = table.refcnts[this];
     size_t oldRefcnt = refcntStorage;
     // isa-side bits should not be set here
     assert((oldRefcnt & SIDE_TABLE_DEALLOCATING) == 0);
     assert((oldRefcnt & SIDE_TABLE_WEAKLY_REFERENCED) == 0);
 
+    // isa.extra_rc 最高位为1，说明还不会溢出；
+    // 为 0 要么还远远溢出不了，要么已经溢出，引用计数已经减半（最高位置0）
     if (oldRefcnt & SIDE_TABLE_RC_PINNED) return true;
 
     uintptr_t carry;
+    // delta_rc = 1000 0000 << 2 bit
+    
     size_t newRefcnt = 
         addc(oldRefcnt, delta_rc << SIDE_TABLE_RC_SHIFT, 0, &carry);
     if (carry) {
+        // 0x8000 0000 0000 0000 | 011，old后两位
         refcntStorage =
             SIDE_TABLE_RC_PINNED | (oldRefcnt & SIDE_TABLE_FLAG_MASK);
         return true;
@@ -1997,28 +2021,29 @@ void arr_init(void)
     return [self class]->superclass;
 }
 
+// 判断给定的cls是否是类对象的元类
 + (BOOL)isMemberOfClass:(Class)cls {
     return object_getClass((id)self) == cls;
 }
-
+// 判断给定的cls是否是实例对象的类
 - (BOOL)isMemberOfClass:(Class)cls {
     return [self class] == cls;
 }
-
+// 判断给定的cls是否是类对象的元类或元类的父类
 + (BOOL)isKindOfClass:(Class)cls {
     for (Class tcls = object_getClass((id)self); tcls; tcls = tcls->superclass) {
         if (tcls == cls) return YES;
     }
     return NO;
 }
-
+// 判断给定的cls是否是实例对象的类或类的父类
 - (BOOL)isKindOfClass:(Class)cls {
     for (Class tcls = [self class]; tcls; tcls = tcls->superclass) {
         if (tcls == cls) return YES;
     }
     return NO;
 }
-
+// 判断给定的cls是否是类对象的父类
 + (BOOL)isSubclassOfClass:(Class)cls {
     for (Class tcls = self; tcls; tcls = tcls->superclass) {
         if (tcls == cls) return YES;

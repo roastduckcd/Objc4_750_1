@@ -232,6 +232,7 @@ static ALWAYS_INLINE
 bool 
 StoreExclusive(uintptr_t *dst, uintptr_t oldvalue, uintptr_t value)
 {
+    // 比较前两个，相等则将value付给dst，返回true
     
     return __sync_bool_compare_and_swap((void **)dst, (void *)oldvalue, (void *)value);
 }

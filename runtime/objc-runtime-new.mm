@@ -530,15 +530,20 @@ static void addUnattachedCategoryForClass(category_t *cat, Class cls,
     NXMapTable *cats = unattachedCategories();
     category_list *list;
 
+    // 主类是否已有分类再哈希表中
     list = (category_list *)NXMapGet(cats, cls);
     if (!list) {
+        // 无，开辟空间
         list = (category_list *)
             calloc(sizeof(*list) + sizeof(list->list[0]), 1);
     } else {
+        // 有，重新分配空间
         list = (category_list *)
             realloc(list, sizeof(*list) + sizeof(list->list[0]) * (list->count + 1));
     }
+    // 添加到分类数组列表中
     list->list[list->count++] = (locstamped_category_t){cat, catHeader};
+    // 插入到category_map哈希表
     NXMapInsert(cats, cls, list);
 }
 
@@ -555,7 +560,7 @@ static void removeUnattachedCategoryForClass(category_t *cat, Class cls)
     // DO NOT use cat->cls! cls may be cat->cls->isa instead
     NXMapTable *cats = unattachedCategories();
     category_list *list;
-
+    // 获取未附加分类哈希表 category_map 中的分类
     list = (category_list *)NXMapGet(cats, cls);
     if (!list) return;
 
@@ -563,6 +568,7 @@ static void removeUnattachedCategoryForClass(category_t *cat, Class cls)
     for (i = 0; i < list->count; i++) {
         if (list->list[i].cat == cat) {
             // shift entries to preserve list order
+            // 将后一个含 category 结构移动，直接覆盖前一个cat的信息
             memmove(&list->list[i], &list->list[i+1], 
                     (list->count-i-1) * sizeof(list->list[i]));
             list->count--;
@@ -719,6 +725,7 @@ prepareMethodLists(Class cls, method_list_t **addedLists, int addedCount,
     if (addedCount == 0) return;
 
     // Don't scan redundantly
+    // 剔除一些 retain/release/allocWithZone 的方法
     bool scanForCustomRR = !cls->hasCustomRR();
     bool scanForCustomAWZ = !cls->hasCustomAWZ();
 
@@ -759,6 +766,7 @@ prepareMethodLists(Class cls, method_list_t **addedLists, int addedCount,
 // Attach method lists and properties and protocols from categories to a class.
 // Assumes the categories in cats are all loaded and sorted by load order, 
 // oldest categories first.
+// 分类添加方法
 static void 
 attachCategories(Class cls, category_list *cats, bool flush_caches)
 {
@@ -782,6 +790,7 @@ attachCategories(Class cls, category_list *cats, bool flush_caches)
     int i = cats->count;
     bool fromBundle = NO;
     while (i--) {
+        // 分类列表中获取最新编译的分类
         auto& entry = cats->list[i];
 
         method_list_t *mlist = entry.cat->methodsForMeta(isMeta);
@@ -805,6 +814,9 @@ attachCategories(Class cls, category_list *cats, bool flush_caches)
     auto rw = cls->data();
 
     prepareMethodLists(cls, mlists, mcount, NO, fromBundle);
+    if (!strcmp(cls->nameForLogging(), "Person")) {
+        printf("来了attachCat");
+    }
     rw->methods.attachLists(mlists, mcount);
     free(mlists);
     if (flush_caches  &&  mcount > 0) flushCaches(cls);
@@ -838,9 +850,15 @@ static void methodizeClass(Class cls)
     }
 
     // Install methods and properties that the class implements itself.
+    // 编译在MachO中的方法
     method_list_t *list = ro->baseMethods();
     if (list) {
         prepareMethodLists(cls, &list, 1, YES, isBundleClass(cls));
+        if (!strcmp(cls->nameForLogging(), "Person") && !isMeta) {
+            printf("来了methodizeClass");
+        }
+        // list_array_t 中 lists 添加 list
+        // 将 ro 中的 baseMethodList 添加到 rw 的methods
         rw->methods.attachLists(&list, 1);
     }
 
@@ -907,12 +925,17 @@ static void remethodizeClass(Class cls)
     isMeta = cls->isMetaClass();
 
     // Re-methodizing: check for more categories
+    // 从哈希表中获取分类列表
     if ((cats = unattachedCategoriesForClass(cls, false/*not realizing*/))) {
         if (PrintConnecting) {
             _objc_inform("CLASS: attaching categories to class '%s' %s", 
                          cls->nameForLogging(), isMeta ? "(meta)" : "");
         }
-        
+        const char *nameForCls = cls->nameForLogging();
+
+        if (!strcmp(cls->nameForLogging(), "Person")) {
+            printf("来了remethodizeClass");
+        }
         attachCategories(cls, cats, true /*flush caches*/);        
         free(cats);
     }
@@ -1146,11 +1169,12 @@ static void addNamedClass(Class cls, const char *name, Class replacing = nil)
     Class old;
     if ((old = getClass(name))  &&  old != replacing) {
         inform_duplicate(name, old, cls);
-
+        // 根据name查找
         // getNonMetaClass uses name lookups. Classes not found by name 
         // lookup must be in the secondary meta->nonmeta table.
         addNonMetaClass(cls);
     } else {
+        // 添加新类到已实现类列表中
         NXMapInsert(gdb_objc_realized_classes, name, cls);
     }
     assert(!(cls->data()->flags & RO_META));
@@ -1423,6 +1447,7 @@ static Class getNonMetaClass(Class metacls, id inst)
     // use inst if available
     if (inst) {
         Class cls = (Class)inst;
+        bool isPerson = !strcmp(cls->nameForLogging(), "Person");
         realizeClass(cls);
         // cls may be a subclass - find the real class for metacls
         while (cls  &&  cls->ISA() != metacls) {
@@ -1610,11 +1635,14 @@ static void removeSubclass(Class supercls, Class subcls)
     assert(subcls->superclass == supercls);
 
     Class *cp;
+    // cp 是当前子类
     for (cp = &supercls->data()->firstSubclass; 
          *cp  &&  *cp != subcls; 
          cp = &(*cp)->data()->nextSiblingClass)
         ;
+    // 为 0 终止
     assert(*cp == subcls);
+    // 当前子类
     *cp = subcls->data()->nextSiblingClass;
 }
 
@@ -1870,15 +1898,23 @@ static Class realizeClass(Class cls)
     assert(cls == remapClass(cls));
 
     // fixme verify class is not in an un-dlopened part of the shared cache?
+    // MachO 中的 ro，编译时确定;
+    // 同时编译时分类方法也一并确定，
+    // TODO: TODO - ro 中已经包含分类方法，后面 attach 个啥啊？
 
     ro = (const class_ro_t *)cls->data();
+    if (!strcmp(cls->nameForLogging(), "Person") && !(ro->flags & RO_META)) {
+        printf("来了realizeClass");
+    }
     if (ro->flags & RO_FUTURE) {
         // This was a future class. rw data is already allocated.
+        // 将来要实现的类, rw 数据已经分配
         rw = cls->data();
         ro = cls->data()->ro;
         cls->changeInfo(RW_REALIZED|RW_REALIZING, RW_FUTURE);
     } else {
         // Normal class. Allocate writeable class data.
+        // 普通类，运行时重新设定 rw
         rw = (class_rw_t *)calloc(sizeof(class_rw_t), 1);
         rw->ro = ro;
         rw->flags = RW_REALIZED|RW_REALIZING;
@@ -1887,11 +1923,13 @@ static Class realizeClass(Class cls)
 
     isMeta = ro->flags & RO_META;
 
+    // 元类版本号： 7， 普通类版本号： 0
     rw->version = isMeta ? 7 : 0;  // old runtime went up to 6
 
 
     // Choose an index for this class.
     // Sets cls->instancesRequireRawIsa if indexes no more indexes are available
+    // 分配类索引
     cls->chooseClassArrayIndex();
 
     if (PrintConnecting) {
@@ -1903,9 +1941,15 @@ static Class realizeClass(Class cls)
     // Realize superclass and metaclass, if they aren't already.
     // This needs to be done after RW_REALIZED is set above, for root classes.
     // This needs to be done after class index is chosen, for root metaclasses.
+    // 实现父类和元类
+    // 需要先设定 ro还是rw 中 flag 包含 RW_REALIZED，并且类的索引已经分配
     supercls = realizeClass(remapClass(cls->superclass));
     metacls = realizeClass(remapClass(cls->ISA()));
 
+    // isa 支持
+    // 手动进制或有些平台不支持
+    // 根元类不需要再支持
+    // ??
 #if SUPPORT_NONPOINTER_ISA
     // Disable non-pointer isa for some classes and/or platforms.
     // Set instancesRequireRawIsa.
@@ -1942,17 +1986,22 @@ static Class realizeClass(Class cls)
 #endif
 
     // Update superclass and metaclass in case of remapping
+    // 设置父类
     cls->superclass = supercls;
+    // 设置元类
     cls->initClassIsa(metacls);
 
-    // Reconcile instance variable offsets / layout.
+    // Reconcile instance variable offsets / layout. 调整
     // This may reallocate class_ro_t, updating our ro variable.
     if (supercls  &&  !isMeta) reconcileInstanceVariables(cls, supercls, ro);
 
     // Set fastInstanceSize if it wasn't set already.
+    // 实例变量总大小
+    // TODO: TODO - 编译时 ro 已经确定，ro 已经设置给 cls -> rw。这里再设置？
     cls->setInstanceSize(ro->instanceSize);
 
     // Copy some flags from ro to rw
+    // 是否有构造函数？
     if (ro->flags & RO_HAS_CXX_STRUCTORS) {
         cls->setHasCxxDtor();
         if (! (ro->flags & RO_HAS_CXX_DTOR_ONLY)) {
@@ -1961,13 +2010,20 @@ static Class realizeClass(Class cls)
     }
 
     // Connect this class to its superclass's subclass lists
+    // 类添加到父类的子类列表中
+    // 根类父类为nil，没得加，为第一个实现的类 OS_object
     if (supercls) {
         addSubclass(supercls, cls);
     } else {
+        printf("add root class: %s", cls->mangledName());
         addRootClass(cls);
     }
 
+    if (!strcmp(cls->nameForLogging(), "Person") && !isMeta) {
+        printf("来了realizeClass");
+    }
     // Attach categories
+    // 添加分类方法
     methodizeClass(cls);
 
     return cls;
@@ -2217,6 +2273,7 @@ bool mustReadClasses(header_info *hi)
     const char *reason;
 
     // If the image is not preoptimized then we must read classes.
+    // 没有优化过的类必须read
     if (!hi->isPreoptimized()) {
         reason = nil; // Don't log this one because it is noisy.
         goto readthem;
@@ -2269,8 +2326,10 @@ bool mustReadClasses(header_info *hi)
 **********************************************************************/
 Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
 {
+    // TODO: TODO - mangle？MachO 读取的类名和想的不一样？
     const char *mangledName = cls->mangledName();
-    
+
+    // 缺少父类或者父类弱连接, 弃用子类
     if (missingWeakSuperclass(cls)) {
         // No superclass (probably weak-linked). 
         // Disavow any knowledge of this subclass.
@@ -2301,6 +2360,8 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
 #endif
 
     Class replacing = nil;
+    // future class: 未来要实现，目前只是占位
+    // ”未实现类“表中查找当前类，并取出
     if (Class newCls = popFutureNamedClass(mangledName)) {
         // This name was previously allocated as a future class.
         // Copy objc_class to future class's struct.
@@ -2311,15 +2372,27 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
                         "because the real class is too big.", 
                         cls->nameForLogging());
         }
-        
+
+        // 将 MachO 中类映射到未实现的类
+
+        // 获取未实现类的数据
         class_rw_t *rw = newCls->data();
         const class_ro_t *old_ro = rw->ro;
+        // MachO 中类数据复制到未实现的新类
         memcpy(newCls, cls, sizeof(objc_class));
+        // 新类数据强转为 class->rw->ro
+        // TODO: TODO - 大小都不同，数据也不一样，为什么？？
+        // 旧类的数据直接放到新类的ro中？此时从 MachO 中拿到的 data() 就是 ro。
+        // class_ro_t存放的是编译期间就确定的；而class_rw_t是在runtime时才确定，
+        // 它会先将class_ro_t的内容拷贝过去，然后再将当前类的分类的这些属性、
+        // 方法等拷贝到其中。所以可以说class_rw_t是class_ro_t的超集，
+        // 当然实际访问类的方法、属性等也都是访问的class_rw_t中的内容
+
         rw->ro = (class_ro_t *)newCls->data();
         newCls->setData(rw);
         freeIfMutable((char *)old_ro->name);
         free((void *)old_ro);
-        
+        // 重映射后的新类替换之前的同名类
         addRemappedClass(cls, newCls);
         
         replacing = cls;
@@ -2332,7 +2405,10 @@ Class readClass(Class cls, bool headerIsBundle, bool headerIsPreoptimized)
         // assert(cls == getClass(name));
         assert(getClass(mangledName));
     } else {
+        // 添加新类到gdb_objc_realized_classes表中
         addNamedClass(cls, mangledName, replacing);
+        // 添加新类到allocatedClasses表。
+        // 该表包含所有通过objc_allocateClassPair注册的类及其元类
         addClassTableEntry(cls);
     }
 
@@ -2358,14 +2434,15 @@ readProtocol(protocol_t *newproto, Class protocol_class,
     // This is not enough to make protocols in unloaded bundles safe, 
     // but it does prevent crashes when looking up unrelated protocols.
     auto insertFn = headerIsBundle ? NXMapKeyCopyingInsert : NXMapInsert;
-
+    // 根据MachO的协议名到 protocol_map 表获取
     protocol_t *oldproto = (protocol_t *)getProtocol(newproto->mangledName);
 
     if (oldproto) {
         // Some other definition already won.
+        // 协议列表中已有相同名协议
         if (PrintProtocols) {
             _objc_inform("PROTOCOLS: protocol at %p is %s  "
-                         "(duplicate of %p)",
+                         "(duplicate重复 of %p)",
                          newproto, oldproto->nameForLogging(), oldproto);
         }
     }
@@ -2373,13 +2450,14 @@ readProtocol(protocol_t *newproto, Class protocol_class,
         // Shared cache initialized the protocol object itself, 
         // but in order to allow out-of-cache replacement we need 
         // to add it to the protocol table now.
-
+        // 获取共享缓存协议
         protocol_t *cacheproto = (protocol_t *)
             getPreoptimizedProtocol(newproto->mangledName);
         protocol_t *installedproto;
         if (cacheproto  &&  cacheproto != newproto) {
             // Another definition in the shared cache wins (because 
             // everything in the cache was fixed up to point to it).
+            // 共享缓存中有同名但实现不一样的协议，使用共享缓存中的协议
             installedproto = cacheproto;
         }
         else {
@@ -2389,6 +2467,7 @@ readProtocol(protocol_t *newproto, Class protocol_class,
         
         assert(installedproto->getIsa() == protocol_class);
         assert(installedproto->size >= sizeof(protocol_t));
+        // 以协议名为key，协议为value 添加到 protocol_map 表
         insertFn(protocol_map, installedproto->mangledName, 
                  installedproto);
         
@@ -2407,7 +2486,10 @@ readProtocol(protocol_t *newproto, Class protocol_class,
         // New protocol from an un-preoptimized image
         // with sufficient storage. Fix it up in place.
         // fixme duplicate protocols from unloadable bundle
+        // MachO 协议字节数 大于 protocol_t
+        // 协议类初始化 isa
         newproto->initIsa(protocol_class);  // fixme pinned
+        // 以协议名为key，协议为value 添加到 protocol_map 表
         insertFn(protocol_map, newproto->mangledName, newproto);
         if (PrintProtocols) {
             _objc_inform("PROTOCOLS: protocol at %p is %s",
@@ -2418,6 +2500,7 @@ readProtocol(protocol_t *newproto, Class protocol_class,
         // New protocol from an un-preoptimized image 
         // with insufficient storage. Reallocate it.
         // fixme duplicate protocols from unloadable bundle
+        // MachO 协议字节数不够，重新分配协议字节数
         size_t size = max(sizeof(protocol_t), (size_t)newproto->size);
         protocol_t *installedproto = (protocol_t *)calloc(size, 1);
         memcpy(installedproto, newproto, newproto->size);
@@ -2543,8 +2626,12 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     // Discover classes. Fix up unresolved future classes. Mark bundle classes.
 
     for (EACH_HEADER) {
+        // 获取 MachO 中 __objc_classlist 字段的类
+        // hi  = hList[i]
         classref_t *classlist = _getObjc2ClassList(hi, &count);
-        
+
+        // 预检查是否需要调用 readClass()
+        // 类是否在共享缓存中，若不再需要加载class，readClass()
         if (! mustReadClasses(hi)) {
             // Image is sufficiently optimized that we need not call readClass()
             continue;
@@ -2552,11 +2639,15 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
         bool headerIsBundle = hi->isBundle();
         bool headerIsPreoptimized = hi->isPreoptimized();
-
+        // 读取编译器写入的所有类和元类
+        // 加载类的两种模式
+        //      哈希表中已经有类存在
+        //      不存在，懒加载的类
         for (i = 0; i < count; i++) {
+            // MachO 中读取的类
             Class cls = (Class)classlist[i];
             Class newCls = readClass(cls, headerIsBundle, headerIsPreoptimized);
-
+            // TODO: TODO - 什么时候发生
             if (newCls != cls  &&  newCls) {
                 // Class was moved but not deleted. Currently this occurs 
                 // only when the new class resolved a future class.
@@ -2576,14 +2667,22 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     // Class refs and super refs are remapped for message dispatching.
     
     if (!noClassesRemapped()) {
+        // 存在重映射过的类
         for (EACH_HEADER) {
+            // MachO 获取类引用
             Class *classrefs = _getObjc2ClassRefs(hi, &count);
             for (i = 0; i < count; i++) {
+                // 防止类引用被重新分配
+                // 使用 MachO 中的类为key 在 remappedClass 表中查找重映射类作为引用
+                // 或者不变
                 remapClassRef(&classrefs[i]);
             }
             // fixme why doesn't test future1 catch the absence of this?
+            // MachO __objc_superrefs 段内容
             classrefs = _getObjc2SuperRefs(hi, &count);
             for (i = 0; i < count; i++) {
+                // 防止类或父类引用被重新分配
+                // 返回当前类的引用
                 remapClassRef(&classrefs[i]);
             }
         }
@@ -2599,10 +2698,12 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
             if (hi->isPreoptimized()) continue;
             
             bool isBundle = hi->isBundle();
+            // 镜像中__objc_selrefs的方法
             SEL *sels = _getObjc2SelectorRefs(hi, &count);
             UnfixedSelectors += count;
             for (i = 0; i < count; i++) {
                 const char *name = sel_cname(sels[i]);
+                // 添加方法到 namedSelectors 表
                 sels[i] = sel_registerNameNoLock(name, isBundle);
             }
         }
@@ -2612,6 +2713,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
 #if SUPPORT_FIXUP
     // Fix up old objc_msgSend_fixup call sites
+    // TODO: TODO - 啥意思
     for (EACH_HEADER) {
         message_ref_t *refs = _getObjc2MessageRefs(hi, &count);
         if (count == 0) continue;
@@ -2633,10 +2735,11 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
         extern objc_class OBJC_CLASS_$_Protocol;
         Class cls = (Class)&OBJC_CLASS_$_Protocol;
         assert(cls);
+        // 创建协议列表
         NXMapTable *protocol_map = protocols();
         bool isPreoptimized = hi->isPreoptimized();
         bool isBundle = hi->isBundle();
-
+        // MachO 获取协议
         protocol_t **protolist = _getObjc2ProtocolList(hi, &count);
         for (i = 0; i < count; i++) {
             readProtocol(protolist[i], cls, protocol_map, 
@@ -2646,6 +2749,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     ts.log("IMAGE TIMES: discover protocols");
 
+    // TODO: TODO - 什么时候可能类或协议的引用会重新分配，为什么 remap
     // Fix up @protocol references
     // Preoptimized images may have the right 
     // answer already but we don't know for sure.
@@ -2660,9 +2764,11 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 
     // Realize non-lazy classes (for +load methods and static instances)
     for (EACH_HEADER) {
+        // MachO __objc_nlclslist 段类信息
         classref_t *classlist = 
             _getObjc2NonlazyClassList(hi, &count);
         for (i = 0; i < count; i++) {
+
             Class cls = remapClass(classlist[i]);
             if (!cls) continue;
 
@@ -2681,8 +2787,9 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
                 cls->ISA()->cache._occupied = 0;
             }
 #endif
-            
+            // 添加非懒加载类到 allocatedClasses 表中，如果他有元类一并加入
             addClassTableEntry(cls);
+            // 初始化类，分配 class_rw_t，返回真正的类结构
             realizeClass(cls);
         }
     }
@@ -2690,6 +2797,7 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
     ts.log("IMAGE TIMES: realize non-lazy classes");
 
     // Realize newly-resolved future classes, in case CF manipulates them
+    // TODO: TODO - 什么是将来要实现的类
     if (resolvedFutureClasses) {
         for (i = 0; i < resolvedFutureClassCount; i++) {
             realizeClass(resolvedFutureClasses[i]);
@@ -2725,11 +2833,13 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
             // Process this category. 
             // First, register the category with its target class. 
             // Then, rebuild the class's method lists (etc) if 
-            // the class is realized. 
+            // the class is realized.
+            // TODO: TODO - here
             bool classExists = NO;
             if (cat->instanceMethods ||  cat->protocols  
                 ||  cat->instanceProperties) 
             {
+                // 添加分类到分类列表，分类列表 到 category_map 哈希表中
                 addUnattachedCategoryForClass(cat, cls, hi);
                 if (cls->isRealized()) {
                     remethodizeClass(cls);
@@ -2838,23 +2948,26 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
 * Schedule +load for classes in this image, any un-+load-ed 
 * superclasses in other images, and any categories in this image.
 **********************************************************************/
+// TODO: TODO - 父类可以没有load方法？？
 // Recursively schedule +load for cls and any un-+load-ed superclasses.
 // cls must already be connected.
 static void schedule_class_load(Class cls)
 {
     if (!cls) return;
     assert(cls->isRealized());  // _read_images should realize
-
+    // RW_LOADED ：+load 方法已经被调用
     if (cls->data()->flags & RW_LOADED) return;
 
     // Ensure superclass-first ordering
     schedule_class_load(cls->superclass);
-
+    // 获取+load实现，添加到数组中
     add_class_to_loadable_list(cls);
     cls->setInfo(RW_LOADED); 
 }
 
 // Quick scan for +load methods that doesn't take a lock.
+// MachO __objc_nlclslist 段
+// MachO __objc_nlcatlist 段
 bool hasLoadMethods(const headerType *mhdr)
 {
     size_t count;
@@ -2871,6 +2984,7 @@ void prepare_load_methods(const headerType *mhdr)
 
     classref_t *classlist = 
         _getObjc2NonlazyClassList(mhdr, &count);
+    // 获取类的+load方法，添加到 loadable_classes 数组中
     for (i = 0; i < count; i++) {
         schedule_class_load(remapClass(classlist[i]));
     }
@@ -2892,6 +3006,7 @@ void prepare_load_methods(const headerType *mhdr)
 * Only handles MH_BUNDLE for now.
 * Locking: write-lock and loadMethodLock acquired by unmap_image
 **********************************************************************/
+// 目前只处理 cpu type 为 MH_BUNDLE 的镜像？？？？
 void _unload_image(header_info *hi)
 {
     size_t count, i;
@@ -2900,7 +3015,8 @@ void _unload_image(header_info *hi)
     runtimeLock.assertLocked();
 
     // Unload unattached categories and categories waiting for +load.
-
+    // 由尚未被附加的和还未调用+load方法的分类开始卸载
+    // 从镜像获取分类
     category_t **catlist = _getObjc2CategoryList(hi, &count);
     for (i = 0; i < count; i++) {
         category_t *cat = catlist[i];
@@ -2918,11 +3034,11 @@ void _unload_image(header_info *hi)
     }
 
     // Unload classes.
-
+    // 卸载主类
     // Gather classes from both __DATA,__objc_clslist 
     // and __DATA,__objc_nlclslist. arclite's hack puts a class in the latter
     // only, and we need to unload that class if we unload an arclite image.
-
+    // 从MachO读取静态编译的类，插入到临时哈希表中
     NXHashTable *classes = NXCreateHashTable(NXPtrPrototype, 0, nil);
     classref_t *classlist;
 
@@ -2940,17 +3056,23 @@ void _unload_image(header_info *hi)
 
     // First detach classes from each other. Then free each class.
     // This avoid bugs where this loop unloads a subclass before its superclass
-
+    // TODO: TODO - 有什么bug？？
+    // 先将所有类的的联系（父子类，isa）断开，再分别卸载类，避免子类先于父类被卸载
+    // 哈希表中都是要卸载的类
     NXHashState hs;
     Class cls;
 
     hs = NXInitHashState(classes);
     while (NXNextHashState(classes, &hs, (void**)&cls)) {
+        // 从 loadable_classes 数组中移除
         remove_class_from_loadable_list(cls);
+        // 断开元类间联系
         detach_class(cls->ISA(), YES);
+        // 断开普通类间联系
         detach_class(cls, NO);
     }
     hs = NXInitHashState(classes);
+    // 释放元类和类
     while (NXNextHashState(classes, &hs, (void**)&cls)) {
         free_class(cls->ISA());
         free_class(cls);
@@ -5377,7 +5499,8 @@ void objc_class::chooseClassArrayIndex()
 #if SUPPORT_INDEXED_ISA
     Class cls = (Class)this;
     runtimeLock.assertLocked();
-
+    long long isa_index_count = ISA_INDEX_COUNT;
+    printf("isa index count = %ld", isa_index_count);
     if (objc_indexed_classes_count >= ISA_INDEX_COUNT) {
         // No more indexes available.
         assert(cls->classArrayIndex() == 0);
@@ -6345,22 +6468,27 @@ static void detach_class(Class cls, bool isMeta)
     runtimeLock.assertLocked();
 
     // categories not yet attached to this class
+    // 以cls为key，移除未附加分类哈希表 category_map 中的分类列表
     removeAllUnattachedCategoriesForClass(cls);
 
     // superclass's subclass list
     if (cls->isRealized()) {
         Class supercls = cls->superclass;
         if (supercls) {
+            // 断开父类与子类的联系
             removeSubclass(supercls, cls);
         } else {
+            // 断开根类与兄弟类的联系
             removeRootClass(cls);
         }
     }
 
     // class tables and +load queue
     if (!isMeta) {
+        // 将类从已实现类哈希表 gdb_objc_realized_classes 删除
         removeNamedClass(cls, cls->mangledName());
     }
+    // 将类从已关联类哈希表中 allocatedClasses 删除
     NXHashRemove(allocatedClasses, cls);
 }
 
@@ -6651,7 +6779,7 @@ void *objc_destructInstance(id obj)
         // Read all of the flags at once for performance.
         bool cxx = obj->hasCxxDtor();
         bool assoc = obj->hasAssociatedObjects();
-
+// TODO: TODO - 释放顺序？？
         // This order is important.
         if (cxx) object_cxxDestruct(obj);
         if (assoc) _object_remove_assocations(obj);
@@ -6844,7 +6972,8 @@ initializeTaggedPointerObfuscator(void)
         // Pull random data into the variable, then shift away all non-payload bits.
         arc4random_buf(&objc_debug_taggedpointer_obfuscator,
                        sizeof(objc_debug_taggedpointer_obfuscator));
-        objc_debug_taggedpointer_obfuscator &= ~_OBJC_TAG_MASK;
+        // OSX 下 -1 的效果
+        objc_debug_taggedpointer_obfuscator &= ~_OBJC_TAG_MASK;// 1UL 1个bit位
     }
 }
 

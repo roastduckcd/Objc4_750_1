@@ -93,6 +93,8 @@ _objc_exitPoints:
 	.align 3
 	.globl _objc_indexed_classes
 _objc_indexed_classes:
+# .fill repeat, size, value
+# 反复拷贝 size个字节，重复 repeat 次, 用 value 填充
 	.fill ISA_INDEX_COUNT, PTRSIZE, 0
 #endif
 
@@ -232,6 +234,10 @@ LExit$0:
 
 .macro CacheLookup
 	// p1 = SEL, p16 = isa
+    // x1 = selector
+    // x16 = class to be searched
+
+    // CACHE 16
 	ldp	p10, p11, [x16, #CACHE]	// p10 = buckets, p11 = occupied|mask
 #if !__LP64__
 	and	w11, w11, 0xffff	// p11 = mask

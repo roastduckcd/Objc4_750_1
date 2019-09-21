@@ -317,6 +317,7 @@ inline unsigned Log2_64(uint64_t Value) {
 /// Log2_32_Ceil - This function returns the ceil log base 2 of the specified
 /// value, 32 if the value is zero. (32 bit edition).
 /// Ex. Log2_32_Ceil(32) == 5, Log2_32_Ceil(1) == 0, Log2_32_Ceil(6) == 3
+    // 返回给定数字的 bit 位数
 inline unsigned Log2_32_Ceil(uint32_t Value) {
   return 32-CountLeadingZeros_32(Value-1);
 }

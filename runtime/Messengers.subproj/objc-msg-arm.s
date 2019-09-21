@@ -247,9 +247,38 @@ LExit$0:
 //	    (not found) continues after CacheLookup2
 //
 /////////////////////////////////////////////////////////////////////
+/*
+ struct objc_class : objc_object {
+     Class ISA;             8
+     Class superclass;      8
+     cache_t cache;         16
+     class_data_bits_t bits;
+ }
+ */
+/*
+ struct cache_t {
+     struct bucket_t *_buckets;
+     mask_t _mask;
+     mask_t _occupied;
+ }
+ */
+/*
+ struct bucket_t {
+     private:
+     // IMP-first is better for arm64e ptrauth and no worse for arm64.
+     // SEL-first is better for armv7* and i386 and x86_64.
+     #if __arm64__
+    // IMP function pointer
+     MethodCacheIMP _imp;
+    // unsigned long
+     cache_key_t _key;
+     #else
+     cache_key_t _key;
+     MethodCacheIMP _imp;
+ }
+ */
 	
 .macro CacheLookup
-	
 	ldrh	r12, [r9, #CACHE_MASK]	// r12 = mask
 	ldr	r9, [r9, #CACHE]	// r9 = buckets
 .if $0 == STRET
@@ -332,6 +361,7 @@ LExit$0:
 	STATIC_ENTRY _cache_getImp
 
 	mov	r9, r0
+    // NORMAL 0
 	CacheLookup NORMAL
 	// cache hit, IMP in r12
 	mov	r0, r12
