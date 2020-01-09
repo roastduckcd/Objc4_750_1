@@ -754,12 +754,14 @@ class StripedMap {
 
     struct PaddedT {
         // SideTable
+        // 64
         T value alignas(CacheLineSize);
     };
 
     PaddedT array[StripeCount];
     // 散列函数：异或位移哈希算法
     static unsigned int indexForPointer(const void *p) {
+        // 将 void * 指针地址转换为为 unsigned long 地址
         uintptr_t addr = reinterpret_cast<uintptr_t>(p);
         return ((addr >> 4) ^ (addr >> 9)) % StripeCount;
     }

@@ -187,15 +187,19 @@ LExit$0:
  *
  ********************************************************************/
 
-#define NORMAL 0
-#define GETIMP 1
-#define LOOKUP 2
+#define NORMAL 0            // _objc_msgSend（常用）
+                                // _objc_msgSendSuper（常用）
+                                // _objc_msgSendSuper2
+#define GETIMP 1            // _cache_getImp（一般用）
+#define LOOKUP 2            // _objc_msgLookup, _objc_msgLookupSuper2
 
+// 缓存中找到方法：直接调用或者返回方法实现地址
 // CacheHit: x17 = cached IMP, x12 = address of cached IMP
 .macro CacheHit
-.if $0 == NORMAL
+.if $0 == NORMAL        // objc_msgSend 方法调用一类（实现找到,p17 存储imp）
+    // TailCallCachedImp 找不到？？？
 	TailCallCachedImp x17, x12	// authenticate and call imp
-.elseif $0 == GETIMP
+.elseif $0 == GETIMP    // 
 	mov	p0, p17
 	AuthAndResignAsIMP x0, x12	// authenticate imp and re-sign as IMP
 	ret				// return IMP
@@ -207,9 +211,12 @@ LExit$0:
 .endif
 .endmacro
 
+// 缓存中未找到方法：
 .macro CheckMiss
 	// miss if bucket->sel == 0
 .if $0 == GETIMP
+    // 如果p9比较为0，跳转代码，只能是后面的
+    // 返回nil
 	cbz	p9, LGetImpMiss
 .elseif $0 == NORMAL
 	cbz	p9, __objc_msgSend_uncached
@@ -238,27 +245,48 @@ LExit$0:
     // x16 = class to be searched
 
     // CACHE 16
+    // objc_class {
+    //      isa         8
+    //      class       8
+    //      cache       16
+    //          struct bucket_t *_buckets;  8
+    //          mask_t _mask;               4
+    //          mask_t _occupied;           4
+    //      bits
 	ldp	p10, p11, [x16, #CACHE]	// p10 = buckets, p11 = occupied|mask
 #if !__LP64__
 	and	w11, w11, 0xffff	// p11 = mask
 #endif
-	and	w12, w1, w11		// x12 = _cmd & mask
+	and	w12, w1, w11		// x12 = _cmd & mask   搜索：begin
+
+
+    // p12 = buckets + ((_cmd & mask) << (1+PTRSHIFT))
+    // 获取 索引 begin 位置的 bucket; buckets 是哈希表起始
+    // 不是直接编译begin吗？？？？
+    // p12 得到 bucket
 	add	p12, p10, p12, LSL #(1+PTRSHIFT)
-		             // p12 = buckets + ((_cmd & mask) << (1+PTRSHIFT))
+
 
 	ldp	p17, p9, [x12]		// {imp, sel} = *bucket
 1:	cmp	p9, p1			// if (bucket->sel != _cmd)
-	b.ne	2f			//     scan more
+	b.ne	2f			//     scan more 不匹配跳转标号 2，否则往下执行
 	CacheHit $0			// call or return imp
 	
 2:	// not hit: p12 = not-hit bucket
+    // __objc_msgSend_uncached c 函数找缓存找方法列表
 	CheckMiss $0			// miss if bucket->sel == 0
+    // 是不是找了一圈了
 	cmp	p12, p10		// wrap if bucket == buckets
+
 	b.eq	3f
+    // bucket != buckets
+    // 栈的内存分布：栈地址由高往低写；所以 --
+    // 堆的内存分布：堆地址由弟往高写；
 	ldp	p17, p9, [x12, #-BUCKET_SIZE]!	// {imp, sel} = *--bucket
 	b	1b			// loop
 
 3:	// wrap: p12 = first bucket, w11 = mask
+    // UXTW：扩展一个字到32位？
 	add	p12, p12, w11, UXTW #(1+PTRSHIFT)
 		                        // p12 = buckets + (mask << 1+PTRSHIFT)
 
@@ -266,6 +294,7 @@ LExit$0:
 	// The slow path may detect any corruption and halt later.
 
 	ldp	p17, p9, [x12]		// {imp, sel} = *bucket
+    // 缓存被中断 ？？
 1:	cmp	p9, p1			// if (bucket->sel != _cmd)
 	b.ne	2f			//     scan more
 	CacheHit $0			// call or return imp
@@ -299,24 +328,31 @@ LExit$0:
 	.align 3
 	.globl _objc_debug_taggedpointer_classes
 _objc_debug_taggedpointer_classes:
-	.fill 16, 8, 0
+	.fill 16, 8, 0  // 16个8字节，初始化为0
 	.globl _objc_debug_taggedpointer_ext_classes
 _objc_debug_taggedpointer_ext_classes:
-	.fill 256, 8, 0
+	.fill 256, 8, 0 // 4K 大小，初始化为0
 #endif
 
 	ENTRY _objc_msgSend
+    // NoFrame = 0x02000000, 无压栈 ？？？？？
 	UNWIND _objc_msgSend, NoFrame
 
+    // p0 isa.bits
 	cmp	p0, #0			// nil check and tagged pointer check
+    // 是否支持 taggedPointer
 #if SUPPORT_TAGGED_POINTERS
+    // p0 <= 0； nonpointer 最后一位 为 1
 	b.le	LNilOrTagged		//  (MSB tagged pointer looks negative)
 #else
-	b.eq	LReturnZero
+    // = 一般不走这步
+	b.eq	LReturnZero // 0
 #endif
+    // 根据 isa 取类
 	ldr	p13, [x0]		// p13 = isa
 	GetClassFromIsa_p16 p13		// p16 = class
 LGetIsaDone:
+    // NORMAL 0
 	CacheLookup NORMAL		// calls imp or objc_msgSend_uncached
 
 #if SUPPORT_TAGGED_POINTERS
@@ -324,18 +360,32 @@ LNilOrTagged:
 	b.eq	LReturnZero		// nil check
 
 	// tagged
+    // https://www.jianshu.com/p/e5452c97cfbd
+    // 得到 _objc_debug_taggedpointer_classes 的基地址
+    // _objc_debug_taggedpointer_classes 值为0
 	adrp	x10, _objc_debug_taggedpointer_classes@PAGE
 	add	x10, x10, _objc_debug_taggedpointer_classes@PAGEOFF
+
+    // https://zhiwei.li/text/2014/11/14/arm%E4%BD%8D%E5%9F%9F%E6%8F%90%E5%8F%96%E6%8C%87%E4%BB%A4sbfx%E5%92%8Cubfx/
+    // 位域操作 (x0 & 0xF0 00 00 00 00 00 00 00) >> 60
+    // 取最高4位？？
 	ubfx	x11, x0, #60, #4
+    // (x11 << 3) 放到 x10，取 x10 执行的内容 给 x16
 	ldr	x16, [x10, x11, LSL #3]
+
+    // 位域操作
 	adrp	x10, _OBJC_CLASS_$___NSUnrecognizedTaggedPointer@PAGE
 	add	x10, x10, _OBJC_CLASS_$___NSUnrecognizedTaggedPointer@PAGEOFF
+
+
 	cmp	x10, x16
+    // 从 taggedPointer 所属类去获取 imp？？？
 	b.ne	LGetIsaDone
 
 	// ext tagged
 	adrp	x10, _objc_debug_taggedpointer_ext_classes@PAGE
 	add	x10, x10, _objc_debug_taggedpointer_ext_classes@PAGEOFF
+
 	ubfx	x11, x0, #52, #8
 	ldr	x16, [x10, x11, LSL #3]
 	b	LGetIsaDone
@@ -440,7 +490,7 @@ LLookup_Nil:
 
 	END_ENTRY _objc_msgLookupSuper2
 
-
+// 仍然回到方法缓存中查找 cache_getImp
 .macro MethodTableLookup
 	
 	// push frame
@@ -461,10 +511,14 @@ LLookup_Nil:
 	str	x8,     [sp, #(8*16+8*8)]
 
 	// receiver and selector already in x0 and x1
+    // x16 isa
 	mov	x2, x16
+    // 推测是c函数 _class_lookupMethodAndLoadCache3
+    // 返回值是匹配的 imp 或者 消息转发 _objc_msgForward_impcache 
 	bl	__class_lookupMethodAndLoadCache3
 
 	// IMP in x0
+    // x0 保存返回值
 	mov	x17, x0
 	
 	// restore registers and return
@@ -489,9 +543,11 @@ LLookup_Nil:
 
 	// THIS IS NOT A CALLABLE C FUNCTION
 	// Out-of-band p16 is the class to search
-	
+	// 仍然会到方法缓存中查找 cache_getImp
 	MethodTableLookup
-	TailCallFunctionPointer x17
+    // x17 IMP 或 msg_Forward 的实现
+    // 调用函数
+	TailCallFunctionPointer x17     // 追踪调用函数指针？
 
 	END_ENTRY __objc_msgSend_uncached
 
@@ -501,7 +557,7 @@ LLookup_Nil:
 
 	// THIS IS NOT A CALLABLE C FUNCTION
 	// Out-of-band p16 is the class to search
-	
+	// 仍然会到方法缓存中查找 cache_getImp
 	MethodTableLookup
 	ret
 
@@ -509,8 +565,9 @@ LLookup_Nil:
 
 
 	STATIC_ENTRY _cache_getImp
-
+    // 由 isa 获取（实例对象-类，类对象-元类）
 	GetClassFromIsa_p16 p0
+    // 方法缓存哈希表查找
 	CacheLookup GETIMP
 
 LGetImpMiss:
@@ -540,7 +597,7 @@ LGetImpMiss:
 
 	
 	ENTRY __objc_msgForward
-
+    // 获取全局函数 __objc_forward_handler 并调用
 	adrp	x17, __objc_forward_handler@PAGE
 	ldr	p17, [x17, __objc_forward_handler@PAGEOFF]
 	TailCallFunctionPointer x17

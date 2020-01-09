@@ -351,6 +351,7 @@ log_and_fill_cache(Class cls, Class implementer, Method meth, SEL sel)
 * Method lookup for dispatchers ONLY. OTHER CODE SHOULD USE lookUpImp().
 * This lookup avoids optimistic cache scan because the dispatcher 
 * already tried that.
+ // 汇编 CacheLookup 已经查找过cache
 **********************************************************************/
 IMP _class_lookupMethodAndLoadCache3(id obj, SEL sel, Class cls)
 {        

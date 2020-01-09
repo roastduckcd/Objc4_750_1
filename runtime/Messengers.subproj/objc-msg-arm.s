@@ -359,7 +359,7 @@ LExit$0:
  ********************************************************************/
 
 	STATIC_ENTRY _cache_getImp
-
+    // r0 class
 	mov	r9, r0
     // NORMAL 0
 	CacheLookup NORMAL

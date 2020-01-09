@@ -97,6 +97,7 @@ typedef struct classref * classref_t;
 *   (e.g. method list fixup markers)
 **********************************************************************/
 template <typename Element, typename List, uint32_t FlagMask>
+// 哈希表
 struct entsize_list_tt {
     uint32_t entsizeAndFlags;
     uint32_t count;

@@ -4790,8 +4790,15 @@ static method_t *findMethodInSortedMethodList(SEL key, const method_list_t *list
     const method_t *probe;
     uintptr_t keyValue = (uintptr_t)key;
     uint32_t count;
-    
+
+    // 分类重写主类方法，分类方法在方法列表前
+    // 多个分类重写主类方法，先编译的分类方法在前，然后才是主类
+    // 外层 for 循环会遍历到 sel == name 的方法
+    // 所以在内层用 while 循环尝试回溯，取得第一个遍历到的方法即分类方法(如果有分类)
+    // 内层 while 确保拿到方法列表最前面的方法
     for (count = list->count; count != 0; count >>= 1) {
+
+        //（probe可能拿到后面的方法？？）
         probe = base + (count >> 1);
         
         uintptr_t probeValue = (uintptr_t)probe->name;
@@ -4800,6 +4807,7 @@ static method_t *findMethodInSortedMethodList(SEL key, const method_list_t *list
             // `probe` is a match.
             // Rewind looking for the *first* occurrence of this value.
             // This is required for correct category overrides.
+            //
             while (probe > first && keyValue == (uintptr_t)probe[-1].name) {
                 probe--;
             }
@@ -4826,6 +4834,7 @@ static method_t *search_method_list(const method_list_t *mlist, SEL sel)
     int methodListHasExpectedSize = mlist->entsize() == sizeof(method_t);
     
     if (__builtin_expect(methodListIsFixedUp && methodListHasExpectedSize, 1)) {
+        // 返回方法列表找到的第一个方法
         return findMethodInSortedMethodList(sel, mlist);
     } else {
         // Linear search of unsorted method list
@@ -4862,6 +4871,7 @@ getMethodNoSuper_nolock(Class cls, SEL sel)
          mlists != end;
          ++mlists)
     {
+
         method_t *m = search_method_list(*mlists, sel);
         if (m) return m;
     }
@@ -4978,6 +4988,13 @@ IMP _class_lookupMethodAndLoadCache3(id obj, SEL sel, Class cls)
 * May return _objc_msgForward_impcache. IMPs destined for external use 
 *   must be converted to _objc_msgForward or _objc_msgForward_stret.
 *   If you don't want forwarding at all, use lookUpImpOrNil() instead.
+*   本类缓存中找
+*   本类缓存中找（第一次过程中可能方法被添加了）
+*   本类方法列表中找，找到先缓存再返回
+*   父类方法缓存中找，找到先缓存到本类缓存中再返回
+*   父类方法列表中找，找到先缓存到本类缓存中再返回
+*   进行一次方法动态解析，resolveMethod 中添加了方法，重新查找一次 imp
+*   仍找不到，将失败的SEL 和 消息转发实现 绑定，缓存到当前类的方法缓存中
 **********************************************************************/
 IMP lookUpImpOrForward(Class cls, SEL sel, id inst, 
                        bool initialize, bool cache, bool resolver)
@@ -4989,6 +5006,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
 
     // Optimistic cache lookup
     if (cache) {
+        // 汇编 _cache_getImp
         imp = cache_getImp(cls, sel);
         if (imp) return imp;
     }
@@ -5025,10 +5043,13 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
 
     // Try this class's cache.
 
+    // 在当前类方法缓存中找到，直接返回，不会到父类查找
     imp = cache_getImp(cls, sel);
     if (imp) goto done;
 
     // Try this class's method lists.
+    // 当前类的方法列表中查找，不会到父类
+    // 方法找到后需要先缓存到当前查找类的缓存中，然后再返回
     {
         Method meth = getMethodNoSuper_nolock(cls, sel);
         if (meth) {
@@ -5039,6 +5060,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     }
 
     // Try superclass caches and method lists.
+    // 查找父类方法缓存和方法列表
     {
         unsigned attempts = unreasonableClassCount();
         for (Class curClass = cls->superclass;
@@ -5051,10 +5073,12 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
             }
             
             // Superclass cache.
+            // 查找父类方法缓存
             imp = cache_getImp(curClass, sel);
             if (imp) {
                 if (imp != (IMP)_objc_msgForward_impcache) {
                     // Found the method in a superclass. Cache it in this class.
+                    // 缓存到父类方法列表
                     log_and_fill_cache(cls, imp, sel, inst, curClass);
                     goto done;
                 }
@@ -5067,6 +5091,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
             }
             
             // Superclass method list.
+            // 父类方法列表
             Method meth = getMethodNoSuper_nolock(curClass, sel);
             if (meth) {
                 log_and_fill_cache(cls, meth->imp, sel, inst, curClass);
@@ -5090,7 +5115,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
 
     // No implementation found, and method resolver didn't help. 
     // Use forwarding.
-
+    // 方法动态解析一次，如果没有resolveMethod中没有动态添加，将解析失败的方法标号和消息转发的实现绑定并缓存到当前类的方法缓存中
     imp = (IMP)_objc_msgForward_impcache;
     cache_fill(cls, sel, imp, inst);
 
