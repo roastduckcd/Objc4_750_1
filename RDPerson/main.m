@@ -13,7 +13,7 @@
 static Person *lockToken;
 
 int main(int argc, const char * argv[]) {
-
+//    [NSObject load];
     lockToken = [[Person alloc] init];
     @synchronized (lockToken) {
         lockToken = nil;
