@@ -26,8 +26,17 @@
 * OS portability layer.
 **********************************************************************/
 
+#define DYLD_MACOSX_VERSION_10_11 0x000A0B00
+#define DYLD_MACOSX_VERSION_10_12 0x000A0C00
+#define DYLD_MACOSX_VERSION_10_13 0x000A0D00
+#define DYLD_MACOSX_VERSION_10_14 0x000A0E00
+#define DYLD_MACOSX_VERSION_10_15 0x000A0F00
+#define DYLD_MACOSX_VERSION_10_15_1 0x000A0F01
+
+
 #include "objc-private.h"
 #include "objc-loadmethod.h"
+#include "objc-cache.h"
 
 #if TARGET_OS_WIN32
 
@@ -102,7 +111,7 @@ WINBOOL APIENTRY DllMain( HMODULE hModule,
     case DLL_PROCESS_ATTACH:
         environ_init();
         tls_init();
-        lock_init();
+        runtime_init();
         sel_init(3500);  // old selector heuristic
         exception_init();
         break;
@@ -227,13 +236,11 @@ static header_info * addHeader(const headerType *mhdr, const char *path, int &to
     bool inSharedCache = false;
 
     // Look for hinfo from the dyld shared cache.
-    // 共享缓存中的镜像
     hi = preoptimizedHinfoForHeader(mhdr);
     if (hi) {
         // Found an hinfo in the dyld shared cache.
 
         // Weed out duplicates.
-        // 剔除废弃的
         if (hi->isLoaded()) {
             return NULL;
         }
@@ -255,20 +262,14 @@ static header_info * addHeader(const headerType *mhdr, const char *path, int &to
         // Verify image_info
         size_t info_size = 0;
         const objc_image_info *image_info = _getObjcImageInfo(mhdr,&info_size);
-        assert(image_info == hi->info());
+        ASSERT(image_info == hi->info());
 #endif
     }
     else 
     {
         // Didn't find an hinfo in the dyld shared cache.
-        // 镜像不再共享缓存
-        // Weed out duplicates
-        for (hi = FirstHeader; hi; hi = hi->getNext()) {
-            if (mhdr == hi->mhdr()) return NULL;
-        }
 
         // Locate the __OBJC segment
-        // 获取__objc_imageinfo段信息
         size_t info_size = 0;
         unsigned long seg_size;
         const objc_image_info *image_info = _getObjcImageInfo(mhdr,&info_size);
@@ -345,7 +346,7 @@ linksToLibrary(const header_info *hi, const char *name)
 **********************************************************************/
 static bool shouldRejectGCApp(const header_info *hi)
 {
-    assert(hi->mhdr()->filetype == MH_EXECUTE);
+    ASSERT(hi->mhdr()->filetype == MH_EXECUTE);
 
     if (!hi->info()->supportsGC()) {
         // App does not use GC. Don't reject it.
@@ -389,7 +390,7 @@ static bool shouldRejectGCApp(const header_info *hi)
 **********************************************************************/
 static bool shouldRejectGCImage(const headerType *mhdr)
 {
-    assert(mhdr->filetype != MH_EXECUTE);
+    ASSERT(mhdr->filetype != MH_EXECUTE);
 
     objc_image_info *image_info;
     size_t size;
@@ -420,6 +421,25 @@ static bool shouldRejectGCImage(const headerType *mhdr)
 
 // SUPPORT_GC_COMPAT
 #endif
+
+
+// Swift currently adds 4 callbacks.
+static GlobalSmallVector<objc_func_loadImage, 4> loadImageFuncs;
+
+void objc_addLoadImageFunc(objc_func_loadImage _Nonnull func) {
+    // Not supported on the old runtime. Not that the old runtime is supported anyway.
+#if __OBJC2__
+    mutex_locker_t lock(runtimeLock);
+    
+    // Call it with all the existing images first.
+    for (auto header = FirstHeader; header; header = header->getNext()) {
+        func((struct mach_header *)header->mhdr());
+    }
+    
+    // Add it to the vector for future loads.
+    loadImageFuncs.append(func);
+#endif
+}
 
 
 /***********************************************************************
@@ -468,25 +488,21 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     int unoptimizedTotalClasses = 0;
     {
         uint32_t i = mhCount;
-        // TODO: TODO - 1.做了什么？？？
         while (i--) {
-            // MachO 头信息
             const headerType *mhdr = (const headerType *)mhdrs[i];
-            // 将MachO头信息添加到一个头信息列表
+
             auto hi = addHeader(mhdr, mhPaths[i], totalClasses, unoptimizedTotalClasses);
             if (!hi) {
                 // no objc data in this entry
                 continue;
             }
-            // 可执行文件
+            
             if (mhdr->filetype == MH_EXECUTE) {
                 // Size some data structures based on main executable's size
 #if __OBJC2__
                 size_t count;
-                // 获取 MachO 中 __objc_selrefs 段的方法数量
                 _getObjc2SelectorRefs(hi, &count);
                 selrefCount += count;
-                // 获取 MachO 中 __objc_msgrefs 段的方法数量
                 _getObjc2MessageRefs(hi, &count);
                 selrefCount += count;
 #else
@@ -525,9 +541,7 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     // executable does not contain Objective-C code but Objective-C 
     // is dynamically loaded later.
     if (firstTime) {
-        // 将libobjc的几个方法添加到方法列表
         sel_init(selrefCount);
-        // 自动释放池和弱引用表初始化
         arr_init();
 
 #if SUPPORT_GC_COMPAT
@@ -583,11 +597,17 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
     }
 
     if (hCount > 0) {
-        // hList 镜像头信息列表
         _read_images(hList, hCount, totalClasses, unoptimizedTotalClasses);
     }
 
     firstTime = NO;
+    
+    // Call image load funcs after everything is set up.
+    for (auto func : loadImageFuncs) {
+        for (uint32_t i = 0; i < mhCount; i++) {
+            func(mhdrs[i]);
+        }
+    }
 }
 
 
@@ -609,7 +629,6 @@ unmap_image_nolock(const struct mach_header *mh)
     header_info *hi;
     
     // Find the runtime's header_info struct for the image
-    // 运行时镜像头部信息
     for (hi = FirstHeader; hi != NULL; hi = hi->getNext()) {
         if (hi->mhdr() == (const headerType *)mh) {
             break;
@@ -624,11 +643,10 @@ unmap_image_nolock(const struct mach_header *mh)
                      hi->mhdr()->filetype == MH_BUNDLE ? " (bundle)" : "",
                      hi->info()->isReplacement() ? " (replacement)" : "");
     }
-    // 卸载镜像
+
     _unload_image(hi);
 
     // Remove header_info from header list
-    // 头部信息列表删除卸载镜像的头信息
     removeHeader(hi);
     free(hi);
 }
@@ -681,7 +699,9 @@ static void defineLockOrder()
     lockdebug_lock_precedes_lock(&impLock, &crashlog_lock);
 #endif
     lockdebug_lock_precedes_lock(&selLock, &crashlog_lock);
+#if CONFIG_USE_CACHE_LOCK
     lockdebug_lock_precedes_lock(&cacheUpdateLock, &crashlog_lock);
+#endif
     lockdebug_lock_precedes_lock(&objcMsgLogLock, &crashlog_lock);
     lockdebug_lock_precedes_lock(&AltHandlerDebugLock, &crashlog_lock);
     lockdebug_lock_precedes_lock(&AssociationsManagerLock, &crashlog_lock);
@@ -703,7 +723,9 @@ static void defineLockOrder()
     lockdebug_lock_precedes_lock(&loadMethodLock, &impLock);
 #endif
     lockdebug_lock_precedes_lock(&loadMethodLock, &selLock);
+#if CONFIG_USE_CACHE_LOCK
     lockdebug_lock_precedes_lock(&loadMethodLock, &cacheUpdateLock);
+#endif
     lockdebug_lock_precedes_lock(&loadMethodLock, &objcMsgLogLock);
     lockdebug_lock_precedes_lock(&loadMethodLock, &AltHandlerDebugLock);
     lockdebug_lock_precedes_lock(&loadMethodLock, &AssociationsManagerLock);
@@ -732,7 +754,9 @@ static void defineLockOrder()
 #endif
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&classInitLock);
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&selLock);
+#if CONFIG_USE_CACHE_LOCK
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&cacheUpdateLock);
+#endif
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&objcMsgLogLock);
     PropertyAndCppObjectAndAssocLocksPrecedeLock(&AltHandlerDebugLock);
 
@@ -754,7 +778,9 @@ static void defineLockOrder()
     SideTableLocksPrecedeLock(&classInitLock);
     // Some operations may occur inside runtimeLock.
     lockdebug_lock_precedes_lock(&runtimeLock, &selLock);
+#if CONFIG_USE_CACHE_LOCK
     lockdebug_lock_precedes_lock(&runtimeLock, &cacheUpdateLock);
+#endif
     lockdebug_lock_precedes_lock(&runtimeLock, &DemangleCacheLock);
 #else
     // Runtime operations may occur inside SideTable locks
@@ -764,7 +790,9 @@ static void defineLockOrder()
     // Method lookup and fixup.
     lockdebug_lock_precedes_lock(&methodListLock, &classLock);
     lockdebug_lock_precedes_lock(&methodListLock, &selLock);
+#if CONFIG_USE_CACHE_LOCK
     lockdebug_lock_precedes_lock(&methodListLock, &cacheUpdateLock);
+#endif
     lockdebug_lock_precedes_lock(&methodListLock, &impLock);
     lockdebug_lock_precedes_lock(&classLock, &selLock);
     lockdebug_lock_precedes_lock(&classLock, &cacheUpdateLock);
@@ -804,7 +832,9 @@ void _objc_atfork_prepare()
     impLock.lock();
 #endif
     selLock.lock();
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.lock();
+#endif
     objcMsgLogLock.lock();
     AltHandlerDebugLock.lock();
     StructLocks.lockAll();
@@ -826,7 +856,9 @@ void _objc_atfork_parent()
     objcMsgLogLock.unlock();
     crashlog_lock.unlock();
     loadMethodLock.unlock();
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.unlock();
+#endif
     selLock.unlock();
     SideTableUnlockAll();
 #if __OBJC2__
@@ -860,7 +892,9 @@ void _objc_atfork_child()
     objcMsgLogLock.forceReset();
     crashlog_lock.forceReset();
     loadMethodLock.forceReset();
+#if CONFIG_USE_CACHE_LOCK
     cacheUpdateLock.forceReset();
+#endif
     selLock.forceReset();
     SideTableForceResetAll();
 #if __OBJC2__
@@ -889,15 +923,21 @@ void _objc_init(void)
     static bool initialized = false;
     if (initialized) return;
     initialized = true;
-
+    
     // fixme defer initialization until an objc-using image is found?
     environ_init();
     tls_init();
     static_init();
-    lock_init();
+    runtime_init();
     exception_init();
+    cache_init();
+    _imp_implementationWithBlock_init();
 
     _dyld_objc_notify_register(&map_images, load_images, unmap_image);
+
+#if __OBJC2__
+    didCallDyldNotifyRegister = true;
+#endif
 }
 
 

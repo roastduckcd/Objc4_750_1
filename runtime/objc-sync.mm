@@ -37,20 +37,14 @@ typedef struct alignas(CacheLineSize) SyncData {
     recursive_mutex_t mutex;
 } SyncData;
 
-// 封装递归锁及其使用的次数
 typedef struct {
-    // 一个标识对象和锁形成的data
     SyncData *data;
-    // 递归锁的次数
     unsigned int lockCount;  // number of times THIS THREAD locked this block
 } SyncCacheItem;
 
 typedef struct SyncCache {
-    // 已经开辟的 cache 数量？
     unsigned int allocated;
-    // 已经使用的 cache 数量？
     unsigned int used;
-    // 线程可以持有多个锁(@synchronized 使用不同标识对象)
     SyncCacheItem list[0];
 } SyncCache;
 
@@ -72,7 +66,6 @@ struct SyncList {
 // Use multiple parallel lists to decrease contention among unrelated objects.
 #define LOCK_FOR_OBJ(obj) sDataLists[obj].lock
 #define LIST_FOR_OBJ(obj) sDataLists[obj].data
-// 哈希表
 static StripedMap<SyncList> sDataLists;
 
 
@@ -81,10 +74,7 @@ enum usage { ACQUIRE, RELEASE, CHECK };
 static SyncCache *fetch_cache(bool create)
 {
     _objc_pthread_data *data;
-    // 获取线程数据
-    // create=NO，若无则返回NULL
-    // create=YES，若无则新建一个返回
-
+    
     data = _objc_fetch_pthread_data(create);
     if (!data) return NULL;
 
@@ -92,7 +82,6 @@ static SyncCache *fetch_cache(bool create)
         if (!create) {
             return NULL;
         } else {
-            // 默认存储4个
             int count = 4;
             data->syncCache = (SyncCache *)
                 calloc(1, sizeof(SyncCache) + count*sizeof(SyncCacheItem));
@@ -118,63 +107,48 @@ void _destroySyncCache(struct SyncCache *cache)
 }
 
 
-    /// 对象保存并关联锁，对象地址经哈希算法后形成SyncData链表
-    /// @param object 对象标识
-    /// @param why 对象持有策略？
 static SyncData* id2data(id object, enum usage why)
 {
-    // 从哈希表中根据标识对象地址获取链表的自旋锁
     spinlock_t *lockp = &LOCK_FOR_OBJ(object);
-    // 从哈希表中根据标识对象地址获取链表
     SyncData **listp = &LIST_FOR_OBJ(object);
     SyncData* result = NULL;
 
-// 支持将data(标识对象+lock)设置为TSD？
 #if SUPPORT_DIRECT_THREAD_KEYS
     // Check per-thread single-entry fast cache for matching object
     bool fastCacheOccupied = NO;
-    // 从当前线程TSD获取data
     SyncData *data = (SyncData *)tls_get_direct(SYNC_DATA_DIRECT_KEY);
     if (data) {
         fastCacheOccupied = YES;
-        // 当前线程持有的锁和传入的锁是否一样
-        // 相同，说明已经有共享资源被上锁
+
         if (data->object == object) {
             // Found a match in fast cache.
             uintptr_t lockCount;
 
             result = data;
-            // 一个锁可以被多个线程持有，一条线程也可以持有多把递归锁
-            // 线程持有的先前的锁数量，递归锁可以重复上锁
             lockCount = (uintptr_t)tls_get_direct(SYNC_COUNT_DIRECT_KEY);
-            // 锁被持有的线程的数量，一个线程持有的锁的数量
             if (result->threadCount <= 0  ||  lockCount <= 0) {
                 _objc_fatal("id2data fastcache is buggy");
             }
 
             switch(why) {
-                    // 上锁，并记录线程持有锁的数量
-                case ACQUIRE: {
-                    lockCount++;
-                    tls_set_direct(SYNC_COUNT_DIRECT_KEY, (void*)lockCount);
-                    break;
+            case ACQUIRE: {
+                lockCount++;
+                tls_set_direct(SYNC_COUNT_DIRECT_KEY, (void*)lockCount);
+                break;
+            }
+            case RELEASE:
+                lockCount--;
+                tls_set_direct(SYNC_COUNT_DIRECT_KEY, (void*)lockCount);
+                if (lockCount == 0) {
+                    // remove from fast cache
+                    tls_set_direct(SYNC_DATA_DIRECT_KEY, NULL);
+                    // atomic because may collide with concurrent ACQUIRE
+                    OSAtomicDecrement32Barrier(&result->threadCount);
                 }
-                    // 解锁，并记录线程持有锁的数量
-                    // 当锁数量为0时，移除作为线程TSD的 data，即释放锁
-                case RELEASE:
-                    lockCount--;
-                    tls_set_direct(SYNC_COUNT_DIRECT_KEY, (void*)lockCount);
-                    if (lockCount == 0) {
-                            // remove from fast cache
-                        tls_set_direct(SYNC_DATA_DIRECT_KEY, NULL);
-                            // atomic because may collide with concurrent ACQUIRE
-                        // 原子操作使锁被持有的线程的数量减一
-                        OSAtomicDecrement32Barrier(&result->threadCount);
-                    }
-                    break;
-                case CHECK:
-                        // do nothing
-                    break;
+                break;
+            case CHECK:
+                // do nothing
+                break;
             }
 
             return result;
@@ -204,10 +178,6 @@ static SyncData* id2data(id object, enum usage why)
                 item->lockCount--;
                 if (item->lockCount == 0) {
                     // remove from per-thread cache
-                    // --used，数组末位的在使用当中的data覆盖不再使用的data
-                    // used再减1，末位data不会再被遍历
-                    // -- used改变，索引也改变
-                    // used - 1，used 不会变，索引改变
                     cache->list[i] = cache->list[--cache->used];
                     // atomic because may collide with concurrent ACQUIRE
                     OSAtomicDecrement32Barrier(&result->threadCount);
@@ -224,24 +194,20 @@ static SyncData* id2data(id object, enum usage why)
 
     // Thread cache didn't find anything.
     // Walk in-use list looking for matching object
-
     // Spinlock prevents multiple threads from creating multiple 
     // locks for the same new object.
-
     // We could keep the nodes in some hash table if we find that there are
     // more than 20 or so distinct locks active, but we don't do that now.
-    // 链表上锁
+    
     lockp->lock();
 
     {
         SyncData* p;
         SyncData* firstUnused = NULL;
-        // 遍历链表，获取当前标识对象对应的data
         for (p = *listp; p != NULL; p = p->nextData) {
             if ( p->object == object ) {
                 result = p;
                 // atomic because may collide with concurrent RELEASE
-                // +1
                 OSAtomicIncrement32Barrier(&result->threadCount);
                 goto done;
             }
@@ -250,12 +216,10 @@ static SyncData* id2data(id object, enum usage why)
         }
     
         // no SyncData currently associated with object
-        // 解锁时，object被修改？
         if ( (why == RELEASE) || (why == CHECK) )
             goto done;
     
         // an unused one was found, use it
-        // data即锁还没被用过：锁释放过再次使用@synchronized
         if ( firstUnused != NULL ) {
             result = firstUnused;
             result->object = (objc_object *)object;
@@ -268,20 +232,16 @@ static SyncData* id2data(id object, enum usage why)
     // XXX allocating memory with a global lock held is bad practice,
     // might be worth releasing the lock, allocating, and searching again.
     // But since we never free these guys we won't be stuck in allocation very often.
-    // 首次使用@synchronized,创建data并加入哈希表
     posix_memalign((void **)&result, alignof(SyncData), sizeof(SyncData));
     result->object = (objc_object *)object;
     result->threadCount = 1;
     new (&result->mutex) recursive_mutex_t(fork_unsafe_lock);
-    // 链表头部插入
     result->nextData = *listp;
     *listp = result;
     
  done:
-    // 链表解锁
     lockp->unlock();
     if (result) {
-        // 首次加锁
         // Only new ACQUIRE should get here.
         // All RELEASE and CHECK and recursive ACQUIRE are 
         // handled by the per-thread caches above.
@@ -294,7 +254,6 @@ static SyncData* id2data(id object, enum usage why)
         if (result->object != object) _objc_fatal("id2data is buggy");
 
 #if SUPPORT_DIRECT_THREAD_KEYS
-        // 保存到TSD还是其他线程缓存
         if (!fastCacheOccupied) {
             // Save in fast thread cache
             tls_set_direct(SYNC_DATA_DIRECT_KEY, result);
@@ -328,9 +287,27 @@ int objc_sync_enter(id obj)
 
     if (obj) {
         SyncData* data = id2data(obj, ACQUIRE);
-        assert(data);
-        // os_unfair_recursive_lock
+        ASSERT(data);
         data->mutex.lock();
+    } else {
+        // @synchronized(nil) does nothing
+        if (DebugNilSync) {
+            _objc_inform("NIL SYNC DEBUG: @synchronized(nil); set a breakpoint on objc_sync_nil to debug");
+        }
+        objc_sync_nil();
+    }
+
+    return result;
+}
+
+BOOL objc_sync_try_enter(id obj)
+{
+    BOOL result = YES;
+
+    if (obj) {
+        SyncData* data = id2data(obj, ACQUIRE);
+        ASSERT(data);
+        result = data->mutex.tryLock();
     } else {
         // @synchronized(nil) does nothing
         if (DebugNilSync) {

@@ -43,7 +43,7 @@ bool prepareOptimizedReturn(ReturnDisposition disposition);
 #if SUPPORT_TAGGED_POINTERS
 
 extern "C" { 
-    extern Class objc_debug_taggedpointer_classes[_OBJC_TAG_SLOT_COUNT*2];
+    extern Class objc_debug_taggedpointer_classes[_OBJC_TAG_SLOT_COUNT];
     extern Class objc_debug_taggedpointer_ext_classes[_OBJC_TAG_EXT_SLOT_COUNT];
 }
 #define objc_tag_classes objc_debug_taggedpointer_classes
@@ -55,8 +55,8 @@ extern "C" {
 
 ALWAYS_INLINE Class &
 classForIndex(uintptr_t index) {
-    assert(index > 0);
-    assert(index < (uintptr_t)objc_indexed_classes_count);
+    ASSERT(index > 0);
+    ASSERT(index < (uintptr_t)objc_indexed_classes_count);
     return objc_indexed_classes[index];
 }
 
@@ -76,20 +76,26 @@ objc_object::isClass()
 inline Class 
 objc_object::getIsa() 
 {
-    if (!isTaggedPointer()) return ISA();
+    if (fastpath(!isTaggedPointer())) return ISA();
 
-    uintptr_t ptr = (uintptr_t)this;
-    if (isExtTaggedPointer()) {
-        uintptr_t slot = 
-            (ptr >> _OBJC_TAG_EXT_SLOT_SHIFT) & _OBJC_TAG_EXT_SLOT_MASK;
-        return objc_tag_ext_classes[slot];
-    } else {
-        uintptr_t slot = 
-            (ptr >> _OBJC_TAG_SLOT_SHIFT) & _OBJC_TAG_SLOT_MASK;
-        return objc_tag_classes[slot];
+    extern objc_class OBJC_CLASS_$___NSUnrecognizedTaggedPointer;
+    uintptr_t slot, ptr = (uintptr_t)this;
+    Class cls;
+
+    slot = (ptr >> _OBJC_TAG_SLOT_SHIFT) & _OBJC_TAG_SLOT_MASK;
+    cls = objc_tag_classes[slot];
+    if (slowpath(cls == (Class)&OBJC_CLASS_$___NSUnrecognizedTaggedPointer)) {
+        slot = (ptr >> _OBJC_TAG_EXT_SLOT_SHIFT) & _OBJC_TAG_EXT_SLOT_MASK;
+        cls = objc_tag_ext_classes[slot];
     }
+    return cls;
 }
 
+inline uintptr_t
+objc_object::isaBits() const
+{
+    return isa.bits;
+}
 
 inline bool 
 objc_object::isTaggedPointer() 
@@ -122,6 +128,12 @@ objc_object::getIsa()
     return ISA();
 }
 
+inline uintptr_t
+objc_object::isaBits() const
+{
+    return isa.bits;
+}
+
 
 inline bool 
 objc_object::isTaggedPointer() 
@@ -151,7 +163,7 @@ objc_object::isExtTaggedPointer()
 inline Class 
 objc_object::ISA() 
 {
-    assert(!isTaggedPointer()); 
+    ASSERT(!isTaggedPointer()); 
 #if SUPPORT_INDEXED_ISA
     if (isa.nonpointer) {
         uintptr_t slot = isa.indexcls;
@@ -163,6 +175,12 @@ objc_object::ISA()
 #endif
 }
 
+inline Class
+objc_object::rawISA()
+{
+    ASSERT(!isTaggedPointer() && !isa.nonpointer);
+    return (Class)isa.bits;
+}
 
 inline bool 
 objc_object::hasNonpointerIsa()
@@ -196,8 +214,8 @@ objc_object::initProtocolIsa(Class cls)
 inline void 
 objc_object::initInstanceIsa(Class cls, bool hasCxxDtor)
 {
-    assert(!cls->instancesRequireRawIsa());
-    assert(hasCxxDtor == cls->hasCxxDtor());
+    ASSERT(!cls->instancesRequireRawIsa());
+    ASSERT(hasCxxDtor == cls->hasCxxDtor());
 
     initIsa(cls, true, hasCxxDtor);
 }
@@ -205,18 +223,18 @@ objc_object::initInstanceIsa(Class cls, bool hasCxxDtor)
 inline void 
 objc_object::initIsa(Class cls, bool nonpointer, bool hasCxxDtor) 
 { 
-    assert(!isTaggedPointer()); 
+    ASSERT(!isTaggedPointer()); 
     
     if (!nonpointer) {
-        isa.cls = cls;
+        isa = isa_t((uintptr_t)cls);
     } else {
-        assert(!DisableNonpointerIsa);
-        assert(!cls->instancesRequireRawIsa());
+        ASSERT(!DisableNonpointerIsa);
+        ASSERT(!cls->instancesRequireRawIsa());
 
         isa_t newisa(0);
 
 #if SUPPORT_INDEXED_ISA
-        assert(cls->classArrayIndex() > 0);
+        ASSERT(cls->classArrayIndex() > 0);
         newisa.bits = ISA_INDEX_MAGIC_VALUE;
         // isa.magic is part of ISA_MAGIC_VALUE
         // isa.nonpointer is part of ISA_MAGIC_VALUE
@@ -249,7 +267,7 @@ objc_object::changeIsa(Class newCls)
     // assert(newCls->isFuture()  || 
     //        newCls->isInitializing()  ||  newCls->isInitialized());
 
-    assert(!isTaggedPointer()); 
+    ASSERT(!isTaggedPointer()); 
 
     isa_t oldisa;
     isa_t newisa;
@@ -271,7 +289,7 @@ objc_object::changeIsa(Class newCls)
             // isa.magic is part of ISA_MAGIC_VALUE
             // isa.nonpointer is part of ISA_MAGIC_VALUE
             newisa.has_cxx_dtor = newCls->hasCxxDtor();
-            assert(newCls->classArrayIndex() > 0);
+            ASSERT(newCls->classArrayIndex() > 0);
             newisa.indexcls = (uintptr_t)newCls->classArrayIndex();
 #else
             if (oldisa.bits == 0) newisa.bits = ISA_MAGIC_VALUE;
@@ -351,7 +369,7 @@ objc_object::setHasAssociatedObjects()
 inline bool
 objc_object::isWeaklyReferenced()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
     if (isa.nonpointer) return isa.weakly_referenced;
     else return sidetable_isWeaklyReferenced();
 }
@@ -380,7 +398,7 @@ objc_object::setWeaklyReferenced_nolock()
 inline bool
 objc_object::hasCxxDtor()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
     if (isa.nonpointer) return isa.has_cxx_dtor;
     else return isa.cls->hasCxxDtor();
 }
@@ -436,13 +454,13 @@ objc_object::rootDealloc()
 inline id 
 objc_object::retain()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
 
     if (fastpath(!ISA()->hasCustomRR())) {
         return rootRetain();
     }
 
-    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, SEL_retain);
+    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, @selector(retain));
 }
 
 
@@ -479,19 +497,15 @@ objc_object::rootRetain(bool tryRetain, bool handleOverflow)
     isa_t newisa;
 
     do {
-        // retainCount 还不需要SideTable存储
         transcribeToSideTable = false;
-        // 原来的isa数据，如果发生进位，isa的has_sidetable_rc位变化
         oldisa = LoadExclusive(&isa.bits);
         newisa = oldisa;
         if (slowpath(!newisa.nonpointer)) {
-            // 非nonpointer的引用计数使用引用计数表存储
             ClearExclusive(&isa.bits);
+            if (rawISA()->isMetaClass()) return (id)this;
             if (!tryRetain && sideTableLocked) sidetable_unlock();
-            if (tryRetain)
-                return sidetable_tryRetain() ? (id)this : nil;
-            else
-                return sidetable_retain();
+            if (tryRetain) return sidetable_tryRetain() ? (id)this : nil;
+            else return sidetable_retain();
         }
         // don't check newisa.fast_rr; we already called any RR overrides
         if (slowpath(tryRetain && newisa.deallocating)) {
@@ -499,34 +513,23 @@ objc_object::rootRetain(bool tryRetain, bool handleOverflow)
             if (!tryRetain && sideTableLocked) sidetable_unlock();
             return nil;
         }
-        // 进位
         uintptr_t carry;
-        // RC_ONE: isa中位域 has_sidetable_rc 位
-        // isa.extra_rc + 1，如果有进位，carry = 1
-        // TODO: TODO - 测试 isa 和 RC_ONE 做了什么？？
-        // 前两个操作数相加，进位置carry为1
-        // 实际 extra_rc + 1
         newisa.bits = addc(newisa.bits, RC_ONE, 0, &carry);  // extra_rc++
 
         if (slowpath(carry)) {
-            // 引用计数太大，一般不会发生
             // newisa.extra_rc++ overflowed
-            // 忽略溢出
             if (!handleOverflow) {
                 ClearExclusive(&isa.bits);
                 return rootRetain_overflow(tryRetain);
             }
             // Leave half of the retain counts inline and 
             // prepare to copy the other half to the side table.
-            // extra_rc 中保留一半大小，剩下的一半大小保存到引用计数表
             if (!tryRetain && !sideTableLocked) sidetable_lock();
             sideTableLocked = true;
             transcribeToSideTable = true;
-            // 保留一半 /2 ； 去掉最高位
             newisa.extra_rc = RC_HALF;
             newisa.has_sidetable_rc = true;
         }
-        // isa.bits 和 oldisa.bit 是否相等，= 将newisa.bits赋值isa.bits。
     } while (slowpath(!StoreExclusive(&isa.bits, oldisa.bits, newisa.bits)));
 
     if (slowpath(transcribeToSideTable)) {
@@ -543,14 +546,14 @@ objc_object::rootRetain(bool tryRetain, bool handleOverflow)
 inline void
 objc_object::release()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
 
     if (fastpath(!ISA()->hasCustomRR())) {
         rootRelease();
         return;
     }
 
-    ((void(*)(objc_object *, SEL))objc_msgSend)(this, SEL_release);
+    ((void(*)(objc_object *, SEL))objc_msgSend)(this, @selector(release));
 }
 
 
@@ -592,6 +595,7 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
         newisa = oldisa;
         if (slowpath(!newisa.nonpointer)) {
             ClearExclusive(&isa.bits);
+            if (rawISA()->isMetaClass()) return false;
             if (sideTableLocked) sidetable_unlock();
             return sidetable_release(performDealloc);
         }
@@ -600,22 +604,18 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
         newisa.bits = subc(newisa.bits, RC_ONE, 0, &carry);  // extra_rc--
         if (slowpath(carry)) {
             // don't ClearExclusive()
-            // 借位说明 isa.extra_rc = 0
             goto underflow;
         }
     } while (slowpath(!StoreReleaseExclusive(&isa.bits, 
                                              oldisa.bits, newisa.bits)));
 
     if (slowpath(sideTableLocked)) sidetable_unlock();
-
-
     return false;
 
  underflow:
     // newisa.extra_rc-- underflowed: borrow from side table or deallocate
 
     // abandon newisa to undo the decrement
-    // 之前extra_rc - 1 放弃，重新使用extra_rc做减法
     newisa = oldisa;
 
     if (slowpath(newisa.has_sidetable_rc)) {
@@ -635,8 +635,7 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
             goto retry;
         }
 
-        // Try to remove some retain counts from the side table.
-        // 从引用计数表获取，实际值可能小于RC_HALF
+        // Try to remove some retain counts from the side table.        
         size_t borrowed = sidetable_subExtraRC_nolock(RC_HALF);
 
         // To avoid races, has_sidetable_rc must remain set 
@@ -645,9 +644,7 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
         if (borrowed > 0) {
             // Side table retain count decreased.
             // Try to add them to the inline count.
-            // extra_rc = 0，引用计数-1，release效果 。
             newisa.extra_rc = borrowed - 1;  // redo the original decrement too
-            // 异步操作引起isa变化？
             bool stored = StoreReleaseExclusive(&isa.bits, 
                                                 oldisa.bits, newisa.bits);
             if (!stored) {
@@ -655,20 +652,13 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
                 // Try it again right now. This prevents livelock on LL/SC 
                 // architectures where the side table access itself may have 
                 // dropped the reservation.
-                // isa 变化使用新的isa
                 isa_t oldisa2 = LoadExclusive(&isa.bits);
                 isa_t newisa2 = oldisa2;
                 if (newisa2.nonpointer) {
                     uintptr_t overflow;
-                    // 变化之前extra_rc = 0
-
-                    // borrowed - 1 因为本次 release
-                    // addc : release 过程中又retain
                     newisa2.bits = 
                         addc(newisa2.bits, RC_ONE * (borrowed-1), 0, &overflow);
-                    // 如果产生借位，在下面恢复引用计数表
                     if (!overflow) {
-                        // 修改 isa.extra_rc
                         stored = StoreReleaseExclusive(&isa.bits, oldisa2.bits, 
                                                        newisa2.bits);
                     }
@@ -678,7 +668,6 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
             if (!stored) {
                 // Inline update failed.
                 // Put the retains back in the side table.
-                // 恢复引用计数表，重新释放一次
                 sidetable_addExtraRC_nolock(borrowed);
                 goto retry;
             }
@@ -708,9 +697,10 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
 
     if (slowpath(sideTableLocked)) sidetable_unlock();
 
-    __sync_synchronize();
+    __c11_atomic_thread_fence(__ATOMIC_ACQUIRE);
+
     if (performDealloc) {
-        ((void(*)(objc_object *, SEL))objc_msgSend)(this, SEL_dealloc);
+        ((void(*)(objc_object *, SEL))objc_msgSend)(this, @selector(dealloc));
     }
     return true;
 }
@@ -720,10 +710,12 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
 inline id 
 objc_object::autorelease()
 {
-    if (isTaggedPointer()) return (id)this;
-    if (fastpath(!ISA()->hasCustomRR())) return rootAutorelease();
+    ASSERT(!isTaggedPointer());
+    if (fastpath(!ISA()->hasCustomRR())) {
+        return rootAutorelease();
+    }
 
-    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, SEL_autorelease);
+    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, @selector(autorelease));
 }
 
 
@@ -768,10 +760,15 @@ objc_object::rootRetainCount()
 inline Class 
 objc_object::ISA() 
 {
-    assert(!isTaggedPointer()); 
+    ASSERT(!isTaggedPointer()); 
     return isa.cls;
 }
 
+inline Class
+objc_object::rawISA()
+{
+    return ISA();
+}
 
 inline bool 
 objc_object::hasNonpointerIsa()
@@ -783,7 +780,7 @@ objc_object::hasNonpointerIsa()
 inline void 
 objc_object::initIsa(Class cls)
 {
-    assert(!isTaggedPointer()); 
+    ASSERT(!isTaggedPointer()); 
     isa = (uintptr_t)cls; 
 }
 
@@ -824,7 +821,7 @@ objc_object::changeIsa(Class cls)
     // assert(cls->isFuture()  ||  
     //        cls->isInitializing()  ||  cls->isInitialized());
 
-    assert(!isTaggedPointer()); 
+    ASSERT(!isTaggedPointer()); 
     
     isa_t oldisa, newisa;
     newisa.cls = cls;
@@ -857,7 +854,7 @@ objc_object::setHasAssociatedObjects()
 inline bool
 objc_object::isWeaklyReferenced()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
 
     return sidetable_isWeaklyReferenced();
 }
@@ -866,7 +863,7 @@ objc_object::isWeaklyReferenced()
 inline void 
 objc_object::setWeaklyReferenced_nolock()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
 
     sidetable_setWeaklyReferenced_nolock();
 }
@@ -875,7 +872,7 @@ objc_object::setWeaklyReferenced_nolock()
 inline bool
 objc_object::hasCxxDtor()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
     return isa.cls->hasCxxDtor();
 }
 
@@ -907,13 +904,13 @@ objc_object::rootDealloc()
 inline id 
 objc_object::retain()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
 
     if (fastpath(!ISA()->hasCustomRR())) {
         return sidetable_retain();
     }
 
-    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, SEL_retain);
+    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, @selector(retain));
 }
 
 
@@ -932,14 +929,14 @@ objc_object::rootRetain()
 inline void
 objc_object::release()
 {
-    assert(!isTaggedPointer());
+    ASSERT(!isTaggedPointer());
 
     if (fastpath(!ISA()->hasCustomRR())) {
         sidetable_release();
         return;
     }
 
-    ((void(*)(objc_object *, SEL))objc_msgSend)(this, SEL_release);
+    ((void(*)(objc_object *, SEL))objc_msgSend)(this, @selector(release));
 }
 
 
@@ -970,7 +967,7 @@ objc_object::autorelease()
     if (isTaggedPointer()) return (id)this;
     if (fastpath(!ISA()->hasCustomRR())) return rootAutorelease();
 
-    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, SEL_autorelease);
+    return ((id(*)(objc_object *, SEL))objc_msgSend)(this, @selector(autorelease));
 }
 
 
@@ -1199,7 +1196,7 @@ setReturnDisposition(ReturnDisposition disposition)
 static ALWAYS_INLINE bool 
 prepareOptimizedReturn(ReturnDisposition disposition)
 {
-    assert(getReturnDisposition() == ReturnAtPlus0);
+    ASSERT(getReturnDisposition() == ReturnAtPlus0);
 
     if (callerAcceptsOptimizedReturn(__builtin_return_address(0))) {
         if (disposition) setReturnDisposition(disposition);

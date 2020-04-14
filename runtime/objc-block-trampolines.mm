@@ -103,15 +103,15 @@ class TrampolinePointerWrapper {
 
         void check() {
 #if DEBUG
-            assert(impl.address() == textSegment + PAGE_MAX_SIZE);
-            assert(impl.address() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
+            ASSERT(impl.address() == textSegment + PAGE_MAX_SIZE);
+            ASSERT(impl.address() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
             assert(impl.address() + PAGE_MAX_SIZE ==
                    last.address() + SLOT_SIZE);
-            assert(last.address()+8 < textSegment + textSegmentSize);
-            assert((last.address() - start.address()) % SLOT_SIZE == 0);
+            ASSERT(last.address()+8 < textSegment + textSegmentSize);
+            ASSERT((last.address() - start.address()) % SLOT_SIZE == 0);
 # if SUPPORT_STRET
-            assert(impl_stret.address() == textSegment + 2*PAGE_MAX_SIZE);
-            assert(impl_stret.address() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
+            ASSERT(impl_stret.address() == textSegment + 2*PAGE_MAX_SIZE);
+            ASSERT(impl_stret.address() % PAGE_SIZE == 0);  // not PAGE_MAX_SIZE
             assert(impl_stret.address() + PAGE_MAX_SIZE ==
                    last_stret.address() + SLOT_SIZE);
             assert(start.address() - impl.address() ==
@@ -163,7 +163,8 @@ public:
         void *dylib = dlopen("/usr/lib/libobjc-trampolines.dylib",
                              RTLD_NOW | RTLD_LOCAL | RTLD_FIRST);
         if (!dylib) {
-            _objc_fatal("couldn't dlopen libobjc-trampolines.dylib");
+            _objc_fatal("couldn't dlopen libobjc-trampolines.dylib: %s",
+                        dlerror());
         }
 
         auto t = new TrampolinePointers(dylib);
@@ -177,6 +178,9 @@ public:
     uintptr_t textSegment() { return get()->textSegment; }
     uintptr_t textSegmentSize() { return get()->textSegmentSize; }
 
+    // See comments below about PAGE_SIZE and PAGE_MAX_SIZE.
+    uintptr_t dataSize() { return PAGE_MAX_SIZE; }
+
     uintptr_t impl() { return get()->impl.address(); }
     uintptr_t start() { return get()->start.address(); }
 };
@@ -184,6 +188,8 @@ public:
 static TrampolinePointerWrapper Trampolines;
 
 // argument mode identifier
+// Some calculations assume that these modes are sequential starting from 0.
+// This order must match the order of the trampoline's assembly code.
 typedef enum {
     ReturnValueInRegisterArgumentMode,
 #if SUPPORT_STRET
@@ -211,8 +217,17 @@ struct TrampolineBlockPageGroup
 {
     TrampolineBlockPageGroup *nextPageGroup; // linked list of all pages
     TrampolineBlockPageGroup *nextAvailablePage; // linked list of pages with available slots
-    
+
     uintptr_t nextAvailable; // index of next available slot, endIndex() if no more available
+
+    const void * TrampolinePtrauth const text;  // text VM region; stored only for the benefit of the leaks tool
+
+    TrampolineBlockPageGroup()
+        : nextPageGroup(nil)
+        , nextAvailablePage(nil)
+        , nextAvailable(startIndex())
+        , text((const void *)((uintptr_t)this + Trampolines.dataSize()))
+    { }
     
     // Payload data: block pointers and free list.
     // Bytes parallel with trampoline header code are the fields above or unused
@@ -249,7 +264,7 @@ struct TrampolineBlockPageGroup
     }
 
     static uintptr_t endIndex() {
-        return (uintptr_t)PAGE_MAX_SIZE / slotSize();
+        return (uintptr_t)Trampolines.dataSize() / slotSize();
     }
 
     static bool validIndex(uintptr_t index) {
@@ -257,17 +272,19 @@ struct TrampolineBlockPageGroup
     }
 
     Payload *payload(uintptr_t index) {
-        assert(validIndex(index));
+        ASSERT(validIndex(index));
         return (Payload *)((char *)this + index*slotSize());
     }
 
     uintptr_t trampolinesForMode(int aMode) {
-        // Skip over data page and Mach-O page.
-        return (uintptr_t)this + PAGE_MAX_SIZE * (2 + aMode);
+        // Skip over the data area, one page of Mach-O headers,
+        // and one text page for each mode before this one.
+        return (uintptr_t)this + Trampolines.dataSize() +
+            PAGE_MAX_SIZE * (1 + aMode);
     }
     
     IMP trampoline(int aMode, uintptr_t index) {
-        assert(validIndex(index));
+        ASSERT(validIndex(index));
         char *base = (char *)trampolinesForMode(aMode);
         char *imp = base + index*slotSize();
 #if __arm__
@@ -293,8 +310,8 @@ struct TrampolineBlockPageGroup
     }
 
     static void check() {
-        assert(TrampolineBlockPageGroup::headerSize() >= sizeof(TrampolineBlockPageGroup));
-        assert(TrampolineBlockPageGroup::headerSize() % TrampolineBlockPageGroup::slotSize() == 0);
+        ASSERT(TrampolineBlockPageGroup::headerSize() >= sizeof(TrampolineBlockPageGroup));
+        ASSERT(TrampolineBlockPageGroup::headerSize() % TrampolineBlockPageGroup::slotSize() == 0);
     }
 
 };
@@ -330,11 +347,11 @@ static TrampolineBlockPageGroup *_allocateTrampolinesAndData()
     // We assume that our code begins on the second TEXT page, but are robust
     // against other additions to the end of the TEXT segment.
 
-    assert(HeadPageGroup == nil  ||  HeadPageGroup->nextAvailablePage == nil);
+    ASSERT(HeadPageGroup == nil  ||  HeadPageGroup->nextAvailablePage == nil);
 
     auto textSource = Trampolines.textSegment();
     auto textSourceSize = Trampolines.textSegmentSize();
-    auto dataSize = PAGE_MAX_SIZE;
+    auto dataSize = Trampolines.dataSize();
 
     // Allocate a single contiguous region big enough to hold data+text.
     kern_return_t result;
@@ -358,10 +375,7 @@ static TrampolineBlockPageGroup *_allocateTrampolinesAndData()
         _objc_fatal("vm_remap trampolines failed (%d)", result);
     }
 
-    TrampolineBlockPageGroup *pageGroup = (TrampolineBlockPageGroup *) dataAddress;
-    pageGroup->nextAvailable = pageGroup->startIndex();
-    pageGroup->nextPageGroup = nil;
-    pageGroup->nextAvailablePage = nil;
+    auto *pageGroup = new ((void*)dataAddress) TrampolineBlockPageGroup;
     
     if (HeadPageGroup) {
         TrampolineBlockPageGroup *lastPageGroup = HeadPageGroup;
@@ -429,10 +443,35 @@ argumentModeForBlock(id block)
     if (_Block_has_signature(block) && _Block_use_stret(block))
         aMode = ReturnValueOnStackArgumentMode;
 #else
-    assert(! (_Block_has_signature(block) && _Block_use_stret(block)));
+    ASSERT(! (_Block_has_signature(block) && _Block_use_stret(block)));
 #endif
     
     return aMode;
+}
+
+/// Initialize the trampoline machinery. Normally this does nothing, as
+/// everything is initialized lazily, but for certain processes we eagerly load
+/// the trampolines dylib.
+void
+_imp_implementationWithBlock_init(void)
+{
+#if TARGET_OS_OSX
+    // Eagerly load libobjc-trampolines.dylib in certain processes. Some
+    // programs (most notably QtWebEngineProcess used by older versions of
+    // embedded Chromium) enable a highly restrictive sandbox profile which
+    // blocks access to that dylib. If anything calls
+    // imp_implementationWithBlock (as AppKit has started doing) then we'll
+    // crash trying to load it. Loading it here sets it up before the sandbox
+    // profile is enabled and blocks it.
+    //
+    // This fixes EA Origin (rdar://problem/50813789)
+    // and Steam (rdar://problem/55286131)
+    if (__progname &&
+        (strcmp(__progname, "QtWebEngineProcess") == 0 ||
+         strcmp(__progname, "Steam Helper") == 0)) {
+        Trampolines.Initialize();
+    }
+#endif
 }
 
 
@@ -446,7 +485,7 @@ _imp_implementationWithBlockNoCopy(id block)
         getOrAllocatePageGroupWithNextAvailable();
 
     uintptr_t index = pageGroup->nextAvailable;
-    assert(index >= pageGroup->startIndex()  &&  index < pageGroup->endIndex());
+    ASSERT(index >= pageGroup->startIndex()  &&  index < pageGroup->endIndex());
     TrampolineBlockPageGroup::Payload *payload = pageGroup->payload(index);
     
     uintptr_t nextAvailableIndex = payload->nextAvailable;

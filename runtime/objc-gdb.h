@@ -61,6 +61,18 @@ gdb_class_getClass(Class _Nonnull cls)
 OBJC_EXPORT Class _Nonnull gdb_object_getClass(id _Nullable obj)
     OBJC_AVAILABLE(10.7, 4.3, 9.0, 1.0, 2.0);
 
+/***********************************************************************
+* Class inspection
+**********************************************************************/
+
+#if __OBJC2__
+
+// Return the raw, mangled name of cls.
+OBJC_EXPORT const char * _Nonnull
+objc_debug_class_getNameRaw(Class _Nullable cls)
+OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+#endif
 
 /***********************************************************************
 * Class lists for heap.
@@ -71,6 +83,15 @@ OBJC_EXPORT Class _Nonnull gdb_object_getClass(id _Nullable obj)
 // Maps class name to Class, for in-use classes only. NXStrValueMapPrototype.
 OBJC_EXPORT NXMapTable * _Nullable gdb_objc_realized_classes
     OBJC_AVAILABLE(10.6, 3.1, 9.0, 1.0, 2.0);
+
+// A generation count of realized classes. Increments when new classes
+// are realized. This is NOT an exact count of the number of classes.
+// It's not guaranteed by how much it increases when classes are
+// realized, only that it increases by something. When classes are
+// removed (unloading bundles or destroying dynamically allocated
+// classes) the number will also increase to signal that there has
+// been a change.
+OBJC_EXPORT uintptr_t objc_debug_realized_class_generation_count;
 
 #else
 
@@ -135,6 +156,49 @@ OBJC_EXPORT uintptr_t objc_indexed_classes_count;
 // Use 0x00007ffffffffff8UL or 0xfffffffcUL when this variable is unavailable.
 OBJC_EXPORT const uintptr_t objc_debug_class_rw_data_mask
     OBJC_AVAILABLE(10.13, 11.0, 11.0, 4.0, 2.0);
+
+// The ABI version for the internal runtime representations
+// lldb, CoreSymbolication and debugging tools need to know
+OBJC_EXTERN const uint32_t objc_class_abi_version
+	OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+
+// the maximum ABI version in existence for now
+#define OBJC_CLASS_ABI_VERSION_MAX 1
+
+// Used when objc_class_abi_version is absent or 0
+struct class_rw_v0_t {
+    uint32_t  flags;
+    uint32_t  version;
+    uintptr_t ro;                   // class_ro_t
+    uintptr_t methods;              // method_array_t
+    uintptr_t properties;           // property_array_t
+    uintptr_t protocols;            // protocol_array_t
+    Class _Nullable firstSubclass;
+    Class _Nullable nextSiblingClass;
+    char *_Nullable demangledName;
+
+    // uint32_t index;              // only when indexed-isa is used
+};
+
+// Used when objc_class_abi_version is 1
+struct class_rw_v1_t {
+    uint32_t  flags;
+    uint16_t  witness;
+    uint16_t  index;                // only when indexed-isa is used
+    uintptr_t ro_or_rw_ext;         // tagged union based on the low bit:
+                                    // 0: class_ro_t  1: class_rw_ext_t
+    Class _Nullable firstSubclass;
+    Class _Nullable nextSiblingClass;
+};
+
+struct class_rw_ext_v1_t {
+    uintptr_t ro;                   // class_ro_t
+    uintptr_t methods;              // method_array_t
+    uintptr_t properties;           // property_array_t
+    uintptr_t protocols;            // protocol_array_t
+    char *_Nullable demangledName;
+    uint32_t version;
+};
 
 #endif
 
@@ -203,6 +267,28 @@ OBJC_EXPORT unsigned int objc_debug_taggedpointer_ext_payload_rshift
     OBJC_AVAILABLE(10.12, 10.0, 10.0, 3.0, 2.0);
 
 #endif
+
+
+/***********************************************************************
+* Swift marker bits
+**********************************************************************/
+#if __OBJC2__
+OBJC_EXPORT const uintptr_t objc_debug_swift_stable_abi_bit
+OBJC_AVAILABLE(10.14.4, 12.2, 12.2, 5.2, 3.2);
+#endif
+
+
+
+/***********************************************************************
+* AutoreleasePoolPage
+**********************************************************************/
+OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_magic_offset  OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_next_offset   OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_thread_offset OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_parent_offset OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_child_offset  OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_depth_offset  OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
+OBJC_EXTERN const uint32_t objc_debug_autoreleasepoolpage_hiwat_offset  OBJC_AVAILABLE(10.15, 13.0, 13.0, 6.0, 5.0);
 
 __END_DECLS
 

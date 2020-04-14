@@ -78,25 +78,21 @@ typedef DisguisedPtr<objc_object *> weak_referrer_t;
 #define REFERRERS_OUT_OF_LINE 2
 
 struct weak_entry_t {
-    //
     DisguisedPtr<objc_object> referent;
     union {
-        // 动态数组模式
         struct {
-            // 保存的是地址的 摘要 -value
-            weak_referrer_t *referrers;         // 弱引用指针
-            uintptr_t     out_of_line_ness : 2; // 数组超出静态模式下数量标记 10
-            uintptr_t     num_refs : PTR_MINUS_2;   // 弱引用数量
-            uintptr_t     mask;     // referrers 16进制数量级    8 16 32
-            uintptr_t     max_hash_displacement;// 数量级的二进制偏移位数
+            weak_referrer_t *referrers;
+            uintptr_t        out_of_line_ness : 2;
+            uintptr_t        num_refs : PTR_MINUS_2;
+            uintptr_t        mask;
+            uintptr_t        max_hash_displacement;
         };
-        // 定长数组模式：使用定长数组，不需要动态的申请内存空间，而是一次分配一块连续的内存空间。这会得到运行效率上的提升。
         struct {
             // out_of_line_ness field is low bits of inline_referrers[1]
             weak_referrer_t  inline_referrers[WEAK_INLINE_COUNT];
         };
     };
-    // true：使用动态数组，false：使用静态数组
+
     bool out_of_line() {
         return (out_of_line_ness == REFERRERS_OUT_OF_LINE);
     }
@@ -123,8 +119,8 @@ struct weak_entry_t {
 struct weak_table_t {
     weak_entry_t *weak_entries;
     size_t    num_entries;
-    uintptr_t mask;                 // hash数组长度-1，会参与hash计算。（注意，这里是hash数组的长度，而不是元素个数。比如，数组长度可能是64，而元素个数仅存了2个） hash数组的长度每次新开辟后是固定的，都是比之前呈2倍增长（最低为8），因此 mask：8-1，16-1，32-1···
-    uintptr_t max_hash_displacement;// 可能会发生的hash冲突的最大次数，用于判断是否出现了逻辑错误（hash表中的冲突次数绝不会超过改值）
+    uintptr_t mask;
+    uintptr_t max_hash_displacement;
 };
 
 /// Adds an (object, weak pointer) pair to the weak table.

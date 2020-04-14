@@ -36,6 +36,7 @@
 static Method _class_getMethod(Class cls, SEL sel);
 static Method _class_getMethodNoSuper(Class cls, SEL sel);
 static Method _class_getMethodNoSuper_nolock(Class cls, SEL sel);
+static Class _class_getNonMetaClass(Class cls, id obj);
 static void flush_caches(Class cls, bool flush_meta);
 
 
@@ -325,6 +326,112 @@ static void _freedHandler(id obj, SEL sel)
 
 
 /***********************************************************************
+* _class_resolveClassMethod
+* Call +resolveClassMethod, looking for a method to be added to class cls.
+* cls should be a metaclass.
+* Does not check if the method already exists.
+**********************************************************************/
+static void _class_resolveClassMethod(id inst, SEL sel, Class cls)
+{
+    ASSERT(cls->isMetaClass());
+    SEL resolve_sel = @selector(resolveClassMethod:);
+
+    if (!lookUpImpOrNil(inst, resolve_sel, cls)) {
+        // Resolver not implemented.
+        return;
+    }
+
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
+    bool resolved = msg(_class_getNonMetaClass(cls, inst), resolve_sel, sel);
+
+    // Cache the result (good or bad) so the resolver doesn't fire next time.
+    // +resolveClassMethod adds to self->ISA() a.k.a. cls
+    IMP imp = lookUpImpOrNil(inst, sel, cls);
+    if (resolved  &&  PrintResolving) {
+        if (imp) {
+            _objc_inform("RESOLVE: method %c[%s %s] "
+                         "dynamically resolved to %p", 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel), imp);
+        }
+        else {
+            // Method resolver didn't add anything?
+            _objc_inform("RESOLVE: +[%s resolveClassMethod:%s] returned YES"
+                         ", but no new implementation of %c[%s %s] was found",
+                         cls->nameForLogging(), sel_getName(sel), 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel));
+        }
+    }
+}
+
+
+/***********************************************************************
+* _class_resolveInstanceMethod
+* Call +resolveInstanceMethod, looking for a method to be added to class cls.
+* cls may be a metaclass or a non-meta class.
+* Does not check if the method already exists.
+**********************************************************************/
+static void _class_resolveInstanceMethod(id inst, SEL sel, Class cls)
+{
+    SEL resolve_sel = @selector(resolveInstanceMethod:);
+
+    if (! lookUpImpOrNil(cls, resolve_sel, cls->ISA())) {
+        // Resolver not implemented.
+        return;
+    }
+
+    BOOL (*msg)(Class, SEL, SEL) = (typeof(msg))objc_msgSend;
+    bool resolved = msg(cls, resolve_sel, sel);
+
+    // Cache the result (good or bad) so the resolver doesn't fire next time.
+    // +resolveInstanceMethod adds to self a.k.a. cls
+    IMP imp = lookUpImpOrNil(inst, sel, cls);
+
+    if (resolved  &&  PrintResolving) {
+        if (imp) {
+            _objc_inform("RESOLVE: method %c[%s %s] "
+                         "dynamically resolved to %p", 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel), imp);
+        }
+        else {
+            // Method resolver didn't add anything?
+            _objc_inform("RESOLVE: +[%s resolveInstanceMethod:%s] returned YES"
+                         ", but no new implementation of %c[%s %s] was found",
+                         cls->nameForLogging(), sel_getName(sel), 
+                         cls->isMetaClass() ? '+' : '-', 
+                         cls->nameForLogging(), sel_getName(sel));
+        }
+    }
+}
+
+
+/***********************************************************************
+* _class_resolveMethod
+* Call +resolveClassMethod or +resolveInstanceMethod.
+* Returns nothing; any result would be potentially out-of-date already.
+* Does not check if the method already exists.
+**********************************************************************/
+static void
+_class_resolveMethod(id inst, SEL sel, Class cls)
+{
+    if (! cls->isMetaClass()) {
+        // try [cls resolveInstanceMethod:sel]
+        _class_resolveInstanceMethod(inst, sel, cls);
+    } 
+    else {
+        // try [nonMetaClass resolveClassMethod:sel]
+        // and [cls resolveInstanceMethod:sel]
+        _class_resolveClassMethod(inst, sel, cls);
+        if (!lookUpImpOrNil(inst, sel, cls)) {
+            _class_resolveInstanceMethod(inst, sel, cls);
+        }
+    }
+}
+
+
+/***********************************************************************
 * log_and_fill_cache
 * Log this method call. If the logger permits it, fill the method cache.
 * cls is the method whose cache should be filled. 
@@ -347,33 +454,18 @@ log_and_fill_cache(Class cls, Class implementer, Method meth, SEL sel)
 
 
 /***********************************************************************
-* _class_lookupMethodAndLoadCache.
-* Method lookup for dispatchers ONLY. OTHER CODE SHOULD USE lookUpImp().
-* This lookup avoids optimistic cache scan because the dispatcher 
-* already tried that.
- // 汇编 CacheLookup 已经查找过cache
-**********************************************************************/
-IMP _class_lookupMethodAndLoadCache3(id obj, SEL sel, Class cls)
-{        
-    return lookUpImpOrForward(cls, sel, obj, 
-                              YES/*initialize*/, NO/*cache*/, YES/*resolver*/);
-}
-
-
-/***********************************************************************
 * lookUpImpOrForward.
 * The standard IMP lookup. 
-* initialize==NO tries to avoid +initialize (but sometimes fails)
-* cache==NO skips optimistic unlocked lookup (but uses cache elsewhere)
-* Most callers should use initialize==YES and cache==YES.
-* inst is an instance of cls or a subclass thereof, or nil if none is known. 
+* Without LOOKUP_INITIALIZE: tries to avoid +initialize (but sometimes fails)
+* Without LOOKUP_CACHE: skips optimistic unlocked lookup (but uses cache elsewhere)
+* Most callers should use LOOKUP_INITIALIZE and LOOKUP_CACHE
+* inst is an instance of cls or a subclass thereof, or nil if none is known.
 *   If cls is an un-initialized metaclass then a non-nil inst is faster.
 * May return _objc_msgForward_impcache. IMPs destined for external use 
 *   must be converted to _objc_msgForward or _objc_msgForward_stret.
-*   If you don't want forwarding at all, use lookUpImpOrNil() instead.
+*   If you don't want forwarding at all, use LOOKUP_NIL.
 **********************************************************************/
-IMP lookUpImpOrForward(Class cls, SEL sel, id inst, 
-                       bool initialize, bool cache, bool resolver)
+IMP lookUpImpOrForward(id inst, SEL sel, Class cls, int behavior)
 {
     Class curClass;
     IMP methodPC = nil;
@@ -383,9 +475,9 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
     methodListLock.assertUnlocked();
 
     // Optimistic cache lookup
-    if (cache) {
+    if (behavior & LOOKUP_CACHE) {
         methodPC = _cache_getImp(cls, sel);
-        if (methodPC) return methodPC;    
+        if (methodPC) goto out_nolock;
     }
 
     // Check for freed class
@@ -393,10 +485,10 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
         return (IMP) _freedHandler;
 
     // Check for +initialize
-    if (initialize  &&  !cls->isInitialized()) {
-        _class_initialize (_class_getNonMetaClass(cls, inst));
-        // If sel == initialize, _class_initialize will send +initialize and 
-        // then the messenger will send +initialize again after this 
+    if ((behavior & LOOKUP_INITIALIZE)  &&  !cls->isInitialized()) {
+        initializeNonMetaClass (_class_getNonMetaClass(cls, inst));
+        // If sel == initialize, initializeNonMetaClass will send +initialize 
+        // and then the messenger will send +initialize again after this 
         // procedure finishes. Of course, if this is not being called 
         // from the messenger then it won't happen. 2778172
     }
@@ -454,7 +546,7 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
 
     // No implementation found. Try method resolver once.
 
-    if (resolver  &&  !triedResolver) {
+    if ((behavior & LOOKUP_RESOLVER)  &&  !triedResolver) {
         methodListLock.unlock();
         _class_resolveMethod(cls, sel, inst);
         triedResolver = YES;
@@ -470,20 +562,11 @@ IMP lookUpImpOrForward(Class cls, SEL sel, id inst,
  done:
     methodListLock.unlock();
 
+ out_nolock:
+    if ((behavior & LOOKUP_NIL) && methodPC == (IMP)_objc_msgForward_impcache) {
+        return nil;
+    }
     return methodPC;
-}
-
-
-/***********************************************************************
-* lookUpImpOrNil.
-* Like lookUpImpOrForward, but returns nil instead of _objc_msgForward_impcache
-**********************************************************************/
-IMP lookUpImpOrNil(Class cls, SEL sel, id inst, 
-                   bool initialize, bool cache, bool resolver)
-{
-    IMP imp = lookUpImpOrForward(cls, sel, inst, initialize, cache, resolver);
-    if (imp == _objc_msgForward_impcache) return nil;
-    else return imp;
 }
 
 
@@ -735,7 +818,7 @@ const char *class_getName(Class cls)
 * Return the ordinary class for this class or metaclass. 
 * Used by +initialize. 
 **********************************************************************/
-Class _class_getNonMetaClass(Class cls, id obj)
+static Class _class_getNonMetaClass(Class cls, id obj)
 {
     // fixme ick
     if (cls->isMetaClass()) {
@@ -753,9 +836,17 @@ Class _class_getNonMetaClass(Class cls, id obj)
         else {
             cls = objc_getClass(cls->name);
         }
-        assert(cls);
+        ASSERT(cls);
     }
 
+    return cls;
+}
+
+
+Class class_initialize(Class cls, id inst) {
+    if (!cls->isInitialized()) {
+        initializeNonMetaClass (_class_getNonMetaClass(cls, inst));
+    }
     return cls;
 }
 
@@ -915,8 +1006,7 @@ Method class_getInstanceMethod(Class cls, SEL sel)
     }
         
     // Search method lists, try method resolver, etc.
-    lookUpImpOrNil(cls, sel, nil, 
-                   NO/*initialize*/, NO/*cache*/, YES/*resolver*/);
+    lookUpImpOrForward(nil, sel, cls, LOOKUP_INITIALIZE | LOOKUP_RESOLVER);
 
     meth = _cache_getMethod(cls, sel, _objc_msgForward_impcache);
     if (meth == (Method)1) {
@@ -2266,7 +2356,7 @@ objc_constructInstance(Class cls, void *bytes)
     obj->initIsa(cls);
 
     if (cls->hasCxxCtor()) {
-        return object_cxxConstructFromClass(obj, cls);
+        return object_cxxConstructFromClass(obj, cls, OBJECT_CONSTRUCT_NONE);
     } else {
         return obj;
     }
@@ -2439,6 +2529,21 @@ id class_createInstanceFromZone(Class cls, size_t extraBytes, void *z)
 {
     OBJC_WARN_DEPRECATED;
     return (*_zoneAlloc)(cls, extraBytes, z);
+}
+
+id
+_objc_rootAllocWithZone(Class cls, malloc_zone_t *zone)
+{
+    id obj;
+
+    if (fastpath(!zone)) {
+        obj = class_createInstance(cls, 0);
+    } else {
+        obj = class_createInstanceFromZone(cls, 0, zone);
+    }
+
+    if (slowpath(!obj)) obj = _objc_callBadAllocHandler(cls);
+    return obj;
 }
 
 unsigned class_createInstances(Class cls, size_t extraBytes, 
